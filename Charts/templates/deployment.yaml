@@ -108,6 +108,8 @@ spec:
               value: "{{ .Values.rateLimiting.maxRequestsPerMinute }}"
             - name: VM_SHUTDOWN_TIMEOUT
               value: "{{ .Values.vmShutdownTimeout }}"
+            - name: NODE_PORT
+              value: "{{ .Values.nodePort.nodePort }}"
           resources:
 {{ toYaml .Values.resources | indent 12 }}
           volumeMounts:

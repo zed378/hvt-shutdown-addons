@@ -47,9 +47,10 @@ _shutdown_in_progress = False
 # Kubernetes API client (initialized lazily)
 k8s_core = None
 
-# Node name and auth token from environment
+# Node name, auth token, and NodePort from environment
 NODE_NAME = os.getenv("NODE_NAME")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN")
+NODE_PORT = int(os.getenv("NODE_PORT", "30088"))
 
 # Configure logging
 _log_handlers = [logging.StreamHandler()]
@@ -245,8 +246,19 @@ async def k8s_readiness_check():
 
 
 @app.post("/system/shutdown", dependencies=[Depends(verify_token)])
-async def execute_shutdown(request: Request, all_nodes: bool = False):
-    """Execute graceful shutdown — returns immediately, runs in background thread."""
+async def execute_shutdown(request: Request, all_nodes: str = None):
+    """Execute graceful shutdown — returns immediately, runs in background.
+
+    Default behavior (no query param): cluster-wide shutdown.
+    Query param ?all_nodes=false: local-only shutdown (used for internal peer calls).
+
+    When cluster-wide shutdown is triggered:
+    1. This node calls shutdown on all peer nodes via HTTP
+    2. Each node deletes its own VM workloads gracefully
+    3. Each node waits for peer nodes to go offline
+    4. Each node powers off its own host
+    This ensures a coordinated, orderly shutdown of the entire cluster.
+    """
     global _shutdown_in_progress
 
     # --- Validation (synchronous, must complete before returning) ---
@@ -267,33 +279,68 @@ async def execute_shutdown(request: Request, all_nodes: bool = False):
             )
         _shutdown_in_progress = True
 
-    # If all_nodes is True, trigger shutdown on other nodes first
-    if all_nodes:
-        logger.info("Coordinated cluster-wide shutdown requested")
-        asyncio.create_task(coordinate_cluster_shutdown())
-    else:
-        # Start background shutdown thread (non-blocking)
+    # Determine if this is an internal peer call (all_nodes=false) or user request
+    is_peer_call = all_nodes == "false"
+
+    if is_peer_call:
+        # Internal call from another node: only shut down locally
+        logger.info("Internal shutdown call from peer node — performing local shutdown only")
         thread = threading.Thread(
             target=run_shutdown_sequence,
+            args=(None,),  # No peer IPs needed for local-only shutdown
             daemon=True,
             name="shutdown-daemon",
         )
         thread.start()
+    else:
+        # User request: cluster-wide shutdown
+        logger.info("Cluster-wide shutdown requested")
+        asyncio.create_task(coordinate_cluster_shutdown())
 
     return {
-        "status": f"Shutdown sequence initiated (all_nodes={all_nodes})",
+        "status": "Shutdown sequence initiated" if is_peer_call else "Cluster-wide shutdown sequence initiated",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
-def run_shutdown_sequence():
-    """Run the full shutdown sequence in a background daemon thread.
-
-    This function runs to completion (or until all methods fail).
-    The _shutdown_in_progress lock is ALWAYS reset in the finally block.
-    """
+def check_ip_online(ip: str) -> bool:
+    """Check if a peer node's webhook is still online/reachable."""
+    url = f"http://{ip}:{NODE_PORT}/healthz"
+    req = urllib.request.Request(url, method="GET")
     try:
-        _execute_shutdown_logic()
+        with urllib.request.urlopen(req, timeout=3) as response:
+            return response.status == 200
+    except Exception:
+        # If any exception occurs (connection refused, timeout, host unreachable), it is offline
+        return False
+
+
+def run_shutdown_sequence(peer_ips: list[str] = None):
+    """Run the full shutdown sequence in a background daemon thread."""
+    try:
+        _graceful_vm_shutdown()
+        
+        if peer_ips:
+            # Wait for peers to go offline before powering off this node
+            logger.info(f"Local VMs shut down. Waiting for peer nodes {peer_ips} to go offline...")
+            start_time = time.time()
+            remaining_peers = list(peer_ips)
+            while remaining_peers and (time.time() - start_time < 300):
+                still_online = []
+                for ip in remaining_peers:
+                    is_online = check_ip_online(ip)
+                    if is_online:
+                        still_online.append(ip)
+                remaining_peers = still_online
+                if remaining_peers:
+                    logger.info(f"Peer nodes still online: {remaining_peers}. Waiting...")
+                    time.sleep(5)
+            if remaining_peers:
+                logger.warning(f"Timeout reached. Proceeding to power off coordinator node anyway. Peers still online: {remaining_peers}")
+            else:
+                logger.info("All peer nodes are offline. Proceeding to power off coordinator node.")
+                
+        _host_poweroff()
     except Exception as e:
         logger.error(f"Background shutdown failed: {str(e)}")
     finally:
@@ -304,7 +351,7 @@ def run_shutdown_sequence():
 
 def call_shutdown_on_node(ip: str):
     """Trigger shutdown on a peer node via HTTP POST request using standard urllib."""
-    url = f"http://{ip}:8080/system/shutdown?all_nodes=false"
+    url = f"http://{ip}:{NODE_PORT}/system/shutdown?all_nodes=false"
     logger.info(f"Sending shutdown request to peer node at {url}")
     req = urllib.request.Request(
         url,
@@ -325,6 +372,7 @@ def call_shutdown_on_node(ip: str):
 async def coordinate_cluster_shutdown():
     """Coordinated shutdown across all nodes by calling the webhook DaemonSet endpoints."""
     logger.info("Coordinating shutdown across all nodes...")
+    peer_ips = []
     try:
         namespace = "harvester-system"
         try:
@@ -341,12 +389,13 @@ async def coordinate_cluster_shutdown():
 
         tasks = []
         for pod in pods:
-            pod_ip = pod.status.pod_ip
+            pod_ip = pod.status.pod_ip or pod.status.host_ip
             node_name = pod.spec.node_name
             if not pod_ip or node_name == NODE_NAME:
                 continue
             
             logger.info(f"Adding peer node {node_name} (IP: {pod_ip}) to shutdown queue")
+            peer_ips.append(pod_ip)
             tasks.append(asyncio.to_thread(call_shutdown_on_node, pod_ip))
 
         if tasks:
@@ -358,24 +407,20 @@ async def coordinate_cluster_shutdown():
     except Exception as e:
         logger.error(f"Error during cluster shutdown coordination: {e}")
     finally:
-        # Finally, shut down the local node in a background thread
-        logger.info(f"Coordinated phase complete. Initiating local node shutdown on {NODE_NAME}")
+        # Finally, start the shutdown sequence on this node, passing the peer IPs to wait for
+        logger.info(f"Initiating local VM shutdown phase on {NODE_NAME}")
         thread = threading.Thread(
             target=run_shutdown_sequence,
+            args=(peer_ips,),
             daemon=True,
             name="shutdown-daemon",
         )
         thread.start()
 
 
-def _execute_shutdown_logic():
-    """Core shutdown logic: VM deletion, wait, host poweroff.
-
-    Runs in a daemon thread. All blocking calls (subprocess, k8s API, time.sleep)
-    are safe here because this runs in a separate thread, not the event loop.
-    """
-    logger.info(f"Background shutdown sequence starting on node {NODE_NAME}")
-
+def _graceful_vm_shutdown():
+    """gracefully terminate VM workloads and wait for them to exit."""
+    logger.info(f"Graceful VM shutdown starting on node {NODE_NAME}")
     try:
         pods = k8s_core.list_pod_for_all_namespaces(
             field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
@@ -424,13 +469,13 @@ def _execute_shutdown_logic():
 
     except Exception as pods_error:
         logger.error(f"Failed to list/delete VM pods: {str(pods_error)}")
-        raise
 
-    # Proceed to baremetal shutdown
+
+def _host_poweroff():
+    """Execute host poweroff commands."""
     logger.info("Proceeding with baremetal poweroff...")
 
     # Shutdown commands: host binaries accessed via chroot /host
-    # Harvester (SUSE Linux Enterprise + K3s) may have binaries at different paths
     chroot_commands = [
         ["/host", "/usr/bin/systemctl", "poweroff", "--force"],
         ["/host", "/usr/bin/poweroff", "--force"],
@@ -441,7 +486,6 @@ def _execute_shutdown_logic():
     ]
 
     for chroot_root, binary, *args in chroot_commands:
-        # Construct: chroot <root> <binary> <args>
         full_cmd = ["chroot", chroot_root, binary] + args
         try:
             logger.info(f"Attempting shutdown via {binary}")
