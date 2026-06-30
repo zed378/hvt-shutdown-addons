@@ -1,0 +1,61 @@
+auth:
+  # IMPORTANT: For raw kubectl apply, encode manually: echo -n "your-secret-token" | base64
+  # For Helm, the token is automatically base64 encoded via {{ .Values.auth.token | b64enc }}
+  token: "this-is-a-secret-token-string"
+
+image:
+  registry: "your-registry"
+  repository: "node-shutdown-api"
+  tag: "latest"
+  pullPolicy: "IfNotPresent"
+
+daemonset:
+  name: "node-shutdown-webhook"
+  namespace: "harvester-system"
+  serviceAccount: "node-shutdown-sa"
+  hostNetwork: true
+  privileged: true
+  labels:
+    app: "node-shutdown"
+
+rbac:
+  clusterRoleName: "node-shutdown-role"
+  clusterRoleBindingName: "node-shutdown-binding"
+  serviceAccountName: "node-shutdown-sa"
+  serviceAccountNamespace: "harvester-system"
+  apiGroups_kubevirt: ["kubevirt.io"]
+  resources_kubevirt: ["virtualmachines", "virtualmachineinstances"]
+  verbs_kubevirt: ["get", "list", "patch", "update"]
+  apiGroups_core: [""]
+  resources_core: ["pods"]
+  verbs_core: ["list", "delete"]
+
+secret:
+  name: "node-shutdown-auth"
+  namespace: "harvester-system"
+  type: "Opaque"
+  key: "auth-token"
+
+gracePeriodSeconds: 10
+healthCheck:
+  liveness:
+    path: "/healthz"
+    port: 8080
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  readiness:
+    path: "/healthz/ready"
+    port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+hostPath:
+  name: "host-root"
+  mountPath: "/host"
+  path: "/"
+  type: "Directory"
+
+podSecurity:
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

@@ -1,0 +1,6 @@
+[*]
+trim_trailing_whitespace = false
+
+[*.yaml]
+# Disable auto-formatting for Helm template files
+disable_format_on_save = true
