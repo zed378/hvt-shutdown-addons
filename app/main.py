@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 import threading
 from threading import Lock
+import urllib.request
+import urllib.error
 
 from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -243,7 +245,7 @@ async def k8s_readiness_check():
 
 
 @app.post("/system/shutdown", dependencies=[Depends(verify_token)])
-async def execute_shutdown(request: Request):
+async def execute_shutdown(request: Request, all_nodes: bool = False):
     """Execute graceful shutdown — returns immediately, runs in background thread."""
     global _shutdown_in_progress
 
@@ -265,15 +267,23 @@ async def execute_shutdown(request: Request):
             )
         _shutdown_in_progress = True
 
-    # Start background shutdown thread (non-blocking)
-    thread = threading.Thread(
-        target=run_shutdown_sequence,
-        daemon=True,
-        name="shutdown-daemon",
-    )
-    thread.start()
+    # If all_nodes is True, trigger shutdown on other nodes first
+    if all_nodes:
+        logger.info("Coordinated cluster-wide shutdown requested")
+        asyncio.create_task(coordinate_cluster_shutdown())
+    else:
+        # Start background shutdown thread (non-blocking)
+        thread = threading.Thread(
+            target=run_shutdown_sequence,
+            daemon=True,
+            name="shutdown-daemon",
+        )
+        thread.start()
 
-    return {"status": "Shutdown sequence initiated, running in background", "timestamp": datetime.now(timezone.utc).isoformat()}
+    return {
+        "status": f"Shutdown sequence initiated (all_nodes={all_nodes})",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
 
 
 def run_shutdown_sequence():
@@ -290,6 +300,72 @@ def run_shutdown_sequence():
         global _shutdown_in_progress
         with _shutdown_lock:
             _shutdown_in_progress = False
+
+
+def call_shutdown_on_node(ip: str):
+    """Trigger shutdown on a peer node via HTTP POST request using standard urllib."""
+    url = f"http://{ip}:8080/system/shutdown?all_nodes=false"
+    logger.info(f"Sending shutdown request to peer node at {url}")
+    req = urllib.request.Request(
+        url,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {AUTH_TOKEN}",
+            "Content-Type": "application/json"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            res_data = response.read().decode()
+            logger.info(f"Peer node at {ip} response: {res_data}")
+    except Exception as e:
+        logger.error(f"Failed to trigger shutdown on peer node at {ip}: {e}")
+
+
+async def coordinate_cluster_shutdown():
+    """Coordinated shutdown across all nodes by calling the webhook DaemonSet endpoints."""
+    logger.info("Coordinating shutdown across all nodes...")
+    try:
+        namespace = "harvester-system"
+        try:
+            with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace", "r") as f:
+                namespace = f.read().strip()
+        except Exception:
+            pass
+
+        # List all pods in the DaemonSet to get peer IPs
+        pods = k8s_core.list_namespaced_pod(
+            namespace=namespace,
+            label_selector="app=node-shutdown"
+        ).items
+
+        tasks = []
+        for pod in pods:
+            pod_ip = pod.status.pod_ip
+            node_name = pod.spec.node_name
+            if not pod_ip or node_name == NODE_NAME:
+                continue
+            
+            logger.info(f"Adding peer node {node_name} (IP: {pod_ip}) to shutdown queue")
+            tasks.append(asyncio.to_thread(call_shutdown_on_node, pod_ip))
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+            logger.info("Coordinated shutdown calls to peer nodes completed")
+        else:
+            logger.info("No peer nodes found to shut down")
+
+    except Exception as e:
+        logger.error(f"Error during cluster shutdown coordination: {e}")
+    finally:
+        # Finally, shut down the local node in a background thread
+        logger.info(f"Coordinated phase complete. Initiating local node shutdown on {NODE_NAME}")
+        thread = threading.Thread(
+            target=run_shutdown_sequence,
+            daemon=True,
+            name="shutdown-daemon",
+        )
+        thread.start()
 
 
 def _execute_shutdown_logic():

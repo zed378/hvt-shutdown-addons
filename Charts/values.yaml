@@ -72,9 +72,7 @@ podSecurity:
     - ALL
   nodeSelector: {}
   tolerations:
-    - effect: NoSchedule
-      key: node-role.kubernetes.io/node
-      operator: Exists
+    - operator: Exists
   affinity: {}
 
 # Rate limiting
@@ -111,6 +109,8 @@ nodePort:
   targetPort: 8080
   # Node port range (30000-32767)
   nodePort: 30088
+  # Routing policy (Local = traffic routed strictly to local node's pod)
+  externalTrafficPolicy: Local
 
 # Max time to wait for VMs to fully shut down before baremetal poweroff (seconds)
 vmShutdownTimeout: 120

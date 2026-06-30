@@ -65,5 +65,14 @@ class TestNodeShutdownAPI(unittest.TestCase):
         mock_thread.assert_called_once()
         mock_thread_instance.start.assert_called_once()
 
+    @patch("app.main.coordinate_cluster_shutdown")
+    def test_shutdown_all_nodes(self, mock_coordinate):
+        response = self.client.post(
+            "/system/shutdown?all_nodes=true",
+            headers={"Authorization": "Bearer test-token"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("all_nodes=True", response.json()["status"])
+
 if __name__ == "__main__":
     unittest.main()
