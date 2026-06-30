@@ -261,13 +261,15 @@ pytest tests/ -v
 
 All scripts are located in the `scripts/` directory:
 
-| Script                         | Platform             | Description                                |
-| ------------------------------ | -------------------- | ------------------------------------------ |
-| `scripts/publish_chart.sh`     | Linux/macOS (bash)   | Package Helm chart and generate index.yaml |
-| `scripts/publish_chart.mac.sh` | macOS (zsh)          | macOS-optimized chart publishing script    |
-| `scripts/publish_chart.ps1`    | Windows (PowerShell) | Windows chart publishing script            |
-| `scripts/create_release.sh`    | Linux/macOS (bash)   | Interactive GitHub release creator         |
-| `scripts/create_release.ps1`   | Windows (PowerShell) | Windows GitHub release creator             |
+| Script                          | Platform             | Description                                |
+| ------------------------------- | -------------------- | ------------------------------------------ |
+| `scripts/publish_chart.sh`      | Linux/macOS (bash)   | Package Helm chart and generate index.yaml |
+| `scripts/publish_chart.mac.sh`  | macOS (zsh)          | macOS-optimized chart publishing script    |
+| `scripts/publish_chart.ps1`     | Windows (PowerShell) | Windows chart publishing script            |
+| `scripts/publish_to_github.sh`  | Linux/macOS (bash)   | Publish chart to GitHub Pages as Helm repo |
+| `scripts/publish_to_github.ps1` | Windows (PowerShell) | Publish chart to GitHub Pages as Helm repo |
+| `scripts/create_release.sh`     | Linux/macOS (bash)   | Interactive GitHub release creator         |
+| `scripts/create_release.ps1`    | Windows (PowerShell) | Windows GitHub release creator             |
 
 ### Creating a GitHub Release
 
@@ -320,6 +322,56 @@ Each release includes the following files in the `releases/` directory:
 | `hvt-shutdown-addons-{version}.zip`    | Compressed source archive (Windows)     |
 | `hvt-shutdown-addons-{version}.tgz`    | Packaged Helm chart                     |
 | `index.yaml`                           | Helm repository index                   |
+
+### Publishing Helm Chart to GitHub as Helm Repository
+
+GitHub can serve as your Helm chart repository using GitHub Pages.
+
+**Prerequisites:**
+
+1. Enable GitHub Pages for this repository:
+   - Go to **Settings → Pages**
+   - Set **Source** to `GitHub Actions` or `Branch`
+   - Select the `pages` branch and `/ (root)` folder
+   - Click **Save**
+
+2. Authenticate GitHub CLI:
+   ```bash
+   gh auth login
+   ```
+
+**Linux/macOS:**
+
+```bash
+# Publish to GitHub (uses origin URL by default)
+./scripts/publish_to_github.sh
+
+# Or specify repository and branch
+./scripts/publish_to_github.sh https://github.com/username/hvt-shutdown-addons.git pages
+```
+
+**Windows:**
+
+```powershell
+# Publish to GitHub (uses origin URL by default)
+.\scripts\publish_to_github.ps1
+
+# Or specify repository and branch
+.\scripts\publish_to_github.ps1 -GithubRepo "https://github.com/username/hvt-shutdown-addons.git" -Branch "pages"
+```
+
+**After publishing, install the chart:**
+
+```bash
+# Add the repository
+helm repo add hvt-shutdown https://yourusername.github.io/hvt-shutdown-addons
+
+# Update repository
+helm repo update
+
+# Install the chart
+helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system
+```
 
 ## Troubleshooting
 

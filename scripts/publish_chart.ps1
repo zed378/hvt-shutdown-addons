@@ -4,6 +4,8 @@
 # Example:
 #   .\scripts\publish_chart.ps1
 #   .\scripts\publish_chart.ps1 -OutputDirectory ".\my-charts"
+#
+# For GitHub Pages as Helm repository, use: .\scripts\publish_to_github.ps1
 
 param(
     [string]$OutputDirectory = ".\charts-output"
@@ -32,5 +34,6 @@ Get-ChildItem $FullOutputDir | Format-Table -AutoSize
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "1. Serve these files via HTTP (e.g., nginx, S3, GitHub Pages)"
-Write-Host "2. Update the repo URL in Charts/addon.yaml to your serving URL"
-Write-Host "3. Apply the Addon CRD: kubectl apply -f Charts/addon.yaml"
+Write-Host "2. For GitHub Pages: use .\scripts\publish_to_github.ps1 instead"
+Write-Host "3. Update the repo URL in Charts/addon.yaml to your serving URL"
+Write-Host "4. Apply the Addon CRD: kubectl apply -f Charts/addon.yaml"

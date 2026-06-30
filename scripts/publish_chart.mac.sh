@@ -5,34 +5,31 @@
 # Example:
 #   ./scripts/publish_chart.mac.sh
 #   ./scripts/publish_chart.mac.sh ./my-charts
+#
+# For GitHub Pages as Helm repository, use: ./scripts/publish_to_github.sh
 
 set -e
 
 # Resolve chart directory (parent of scripts/)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CHART_DIR="$SCRIPT_DIR/../Charts"
-OUTPUT_DIR="${1:-./charts-output}"
-
-# Resolve output directory to absolute path
-case "$OUTPUT_DIR" in
-    /*) FULL_OUTPUT_DIR="$OUTPUT_DIR" ;;
-    *) FULL_OUTPUT_DIR="$SCRIPT_DIR/$OUTPUT_DIR" ;;
-esac
+OUTPUT_DIR="${1:-$SCRIPT_DIR/../charts-output}"
 
 echo "Packaging Helm chart..."
-helm package "$CHART_DIR" --destination "$FULL_OUTPUT_DIR"
+helm package "$CHART_DIR" --destination "$OUTPUT_DIR"
 
 echo ""
 echo "Generating index.yaml..."
-helm repo index --url "https://your-registry.example.com/charts" "$FULL_OUTPUT_DIR"
+helm repo index --url "https://your-registry.example.com/charts" "$OUTPUT_DIR"
 
 echo ""
-echo "Chart published to: $FULL_OUTPUT_DIR"
+echo "Chart published to: $OUTPUT_DIR"
 echo ""
 echo "Files created:"
-ls -la "$FULL_OUTPUT_DIR"
+ls -la "$OUTPUT_DIR"
 echo ""
 echo "Next steps:"
 echo "1. Serve these files via HTTP (e.g., nginx, S3, GitHub Pages)"
-echo "2. Update the repo URL in Charts/addon.yaml to your serving URL"
-echo "3. Apply the Addon CRD: kubectl apply -f Charts/addon.yaml"
+echo "2. For GitHub Pages: use ./scripts/publish_to_github.sh instead"
+echo "3. Update the repo URL in Charts/addon.yaml to your serving URL"
+echo "4. Apply the Addon CRD: kubectl apply -f Charts/addon.yaml"

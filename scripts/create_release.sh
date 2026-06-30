@@ -87,6 +87,15 @@ PROJECT_ROOT="$SCRIPT_DIR/.."
 RELEASES_DIR="$PROJECT_ROOT/releases"
 OUTPUT_DIR="$SCRIPT_DIR/../charts-output"
 
+# Extract owner and repo name for GitHub Pages URL
+OWNER=$(echo "$GITHUB_REPO" | sed -n 's|.*github\.com[:/]*/\([^/]*\).*|\1|p')
+if [ -z "$OWNER" ]; then
+    OWNER=$(git remote get-url origin 2>/dev/null | sed -n 's|.*github\.com[:/]*/\([^/]*\).*|\1|p')
+fi
+if [ -z "$OWNER" ]; then
+    OWNER=$(echo "$COMMIT_HASH" | xargs git config --get user.name 2>/dev/null || echo "yourusername")
+fi
+
 mkdir -p "$RELEASES_DIR"
 mkdir -p "$OUTPUT_DIR"
 
@@ -96,9 +105,10 @@ echo "Packaging Helm chart..."
 CHART_DIR="$PROJECT_ROOT/Charts"
 helm package "$CHART_DIR" --destination "$OUTPUT_DIR"
 
-# Generate index
+# Generate index (use GitHub Pages URL or default)
+GITHUB_REPO="${GITHUB_REPO:-https://github.com/$OWNER/$REPO_NAME}"
 echo "Generating index.yaml..."
-helm repo index --url "https://your-registry.example.com/charts" "$OUTPUT_DIR"
+helm repo index --url "https://$OWNER.github.io/$REPO_NAME" "$OUTPUT_DIR"
 
 # Find the packaged chart file
 CHART_TGZ=$(ls "$OUTPUT_DIR"/*.tgz 2>/dev/null | head -1)

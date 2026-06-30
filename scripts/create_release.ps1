@@ -26,6 +26,16 @@ $Branch = & git branch --show-current 2>$null
 $RepoName = (Split-Path (git remote get-url origin 2>$null) -Leaf) -replace '\.git$', ''
 if (-not $RepoName) { $RepoName = "hvt-shutdown-addons" }
 
+# Extract owner for GitHub Pages URL
+$Owner = ""
+$RemoteUrl = git remote get-url origin 2>$null
+if ($RemoteUrl -match 'github\.com[/:](?<owner>[^/]+)') {
+    $Owner = $Matches.owner
+}
+if (-not $Owner) {
+    $Owner = "yourusername"
+}
+
 # Prompt for version if not provided
 if (-not $Version) {
     $Version = Read-Host "Enter release version (e.g., 1.0.0)"
@@ -92,9 +102,9 @@ Write-Host "Packaging Helm chart..." -ForegroundColor Cyan
 $ChartDir = Join-Path $ProjectRoot "Charts"
 helm package $ChartDir --destination $OutputDir
 
-# Generate index
+# Generate index with GitHub Pages URL
 Write-Host "Generating index.yaml..." -ForegroundColor Cyan
-helm repo index --url "https://your-registry.example.com/charts" "$OutputDir"
+helm repo index --url "https://$Owner.github.io/$RepoName" "$OutputDir"
 
 # Find the packaged chart file
 $ChartTgz = Get-ChildItem "$OutputDir\*.tgz" | Select-Object -First 1
