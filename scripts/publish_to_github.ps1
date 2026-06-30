@@ -2,10 +2,11 @@
 # Usage: .\scripts\publish_to_github.ps1
 #
 # This script:
-# 1. Packages the Helm chart
-# 2. Generates index.yaml with correct GitHub Pages URL
-# 3. Pushes to the 'pages' branch
-# 4. GitHub Pages will serve the files automatically
+# 1. Packages the Helm chart to root directory
+# 2. Generates index.yaml in root directory
+# 3. Checkout only generated files to 'pages' branch via git worktree
+# 4. Deletes generated files from root after publish
+# 5. GitHub Pages will serve the files automatically
 #
 # Requirements:
 #   - GitHub CLI (gh) authenticated: gh auth login
@@ -33,7 +34,11 @@ $GithubRepo = "https://github.com/${Owner}/${RepoName}.git"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 $ChartDir = Join-Path $ProjectRoot "Charts"
-$OutputDir = Join-Path $ScriptDir "..\charts-output"
+
+# Generated files in root directory
+$ChartTgzFile = Join-Path $ProjectRoot "node-shutdown-1.0.0.tgz"
+$IndexYamlFile = Join-Path $ProjectRoot "index.yaml"
+$TempDir = New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "temp-github-pages-$$") | Select-Object -ExpandProperty FullName
 
 Write-Host ""
 Write-Host "=== GitHub Helm Repository Publisher ===" -ForegroundColor Cyan
@@ -44,90 +49,99 @@ Write-Host "Helm Repo URL: $HelmRepoUrl" -ForegroundColor Yellow
 Write-Host ""
 
 # Check prerequisites
-foreach ($cmd in @("gh", "helm", "git")) {
+foreach ($cmd in @("helm", "git")) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
         Write-Host "Error: $cmd is not installed." -ForegroundColor Red
         exit 1
     }
 }
 
-# Check GitHub authentication
-try {
-    gh auth status 2>&1 | Out-Null
-    Write-Host "GitHub CLI: Authenticated" -ForegroundColor Green
-} catch {
-    Write-Host "Error: GitHub CLI is not authenticated. Run 'gh auth login' first." -ForegroundColor Red
+# Check git remote
+$remoteUrl = git remote get-url origin 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Error: No git remote 'origin' configured." -ForegroundColor Red
+    Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
     exit 1
+}
+Write-Host "Git remote: $remoteUrl" -ForegroundColor Green
+
+# Check if gh is available for nicer auth experience
+if (Get-Command "gh" -ErrorAction SilentlyContinue) {
+    $ghStatus = gh auth status 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Warning: GitHub CLI (gh) authentication failed." -ForegroundColor Yellow
+        Write-Host "Ensure you're authenticated via 'gh auth login' or git credential manager." -ForegroundColor Yellow
+    } else {
+        Write-Host "GitHub CLI: Authenticated" -ForegroundColor Green
+    }
+} else {
+    Write-Host "Note: GitHub CLI (gh) not installed. Using git credential manager for authentication." -ForegroundColor Yellow
+    Write-Host "Install gh at: https://cli.github.com" -ForegroundColor Yellow
 }
 
 Write-Host "Owner: $Owner" -ForegroundColor Yellow
 Write-Host "Repo: $RepoName" -ForegroundColor Yellow
 Write-Host ""
 
-# Confirm
-$confirm = Read-Host "Publish Helm chart to GitHub? (y/n)"
-if ($confirm -ne 'y' -and $confirm -ne 'Y') {
-    Write-Host "Cancelled." -ForegroundColor Yellow
-    exit 0
-}
+# Package the Helm chart to root directory
+Write-Host "=== Packaging Helm chart to root ===" -ForegroundColor Cyan
+helm package $ChartDir --destination $ProjectRoot
 
-# Package the Helm chart
-Write-Host "=== Packaging Helm chart ===" -ForegroundColor Cyan
-New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-helm package $ChartDir --destination $OutputDir
-
-# Find the packaged chart
-$ChartTgz = Get-ChildItem "$OutputDir\*.tgz" | Select-Object -First 1
-if (-not $ChartTgz) {
+if (-not (Test-Path $ChartTgzFile)) {
     Write-Host "Error: Failed to package Helm chart." -ForegroundColor Red
+    Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
     exit 1
 }
 
-$ChartFilename = $ChartTgz.Name
+$ChartFilename = "node-shutdown-1.0.0.tgz"
 Write-Host "Chart: $ChartFilename" -ForegroundColor Green
 
-# Generate index.yaml with correct URL
-Write-Host "Generating index.yaml..." -ForegroundColor Cyan
-helm repo index --url $HelmRepoUrl "$OutputDir"
+# Generate index.yaml in root directory
+Write-Host "Generating index.yaml in root..." -ForegroundColor Cyan
+helm repo index --url $HelmRepoUrl $ProjectRoot
 
 Write-Host ""
 Write-Host "=== index.yaml content ===" -ForegroundColor Cyan
-Get-Content "$OutputDir\index.yaml"
+Get-Content $IndexYamlFile
 Write-Host ""
 
-# Clone the target branch
-Write-Host "=== Cloning branch '$Branch' ===" -ForegroundColor Cyan
-$TempDir = New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "temp-gh-pages-clone") | Out-Null
+# Checkout generated files to pages branch
+Write-Host "=== Checking out generated files to '$Branch' ===" -ForegroundColor Cyan
+$PagesDir = Join-Path $TempDir "pages"
 
-if (git clone --branch $Branch --single-branch $GithubRepo "$TempDir\clone" 2>$null) {
-    Write-Host "Branch '$Branch' found." -ForegroundColor Green
+# Clone pages branch directly
+if (git clone --branch $Branch --single-branch $GithubRepo $PagesDir 2>$null) {
+    Write-Host "Cloned $Branch branch." -ForegroundColor Green
 } else {
-    Write-Host "Branch '$Branch' not found. Creating new branch from main..." -ForegroundColor Yellow
-    git clone $GithubRepo "$TempDir\clone"
-    Set-Location "$TempDir\clone"
-    git checkout main 2>$null
-    git checkout -b $Branch
-    Set-Location $ProjectRoot
+    Write-Host "Error: Cannot clone $Branch branch." -ForegroundColor Red
+    Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
 }
 
-$CloneDir = Join-Path $TempDir "clone"
+Set-Location $PagesDir
 
-# Create charts directory in clone
-New-Item -ItemType Directory -Force -Path (Join-Path $CloneDir "charts") | Out-Null
+# Copy generated files
+Copy-Item $ChartTgzFile (Join-Path $PagesDir $ChartFilename)
+Copy-Item $IndexYamlFile (Join-Path $PagesDir "index.yaml")
 
-# Copy chart files
-Copy-Item $ChartTgz.FullName (Join-Path $CloneDir "charts\$ChartFilename")
-Copy-Item (Join-Path $OutputDir "index.yaml") (Join-Path $CloneDir "index.yaml")
-
-# Commit and push
-Set-Location $CloneDir
-git add "charts/$ChartFilename" index.yaml
+git add $ChartFilename index.yaml
 git config user.email "${Owner}@users.noreply.github.com"
 git config user.name $Owner
 git commit -m "Add helm chart $ChartFilename" --allow-empty 2>$null | Out-Null
-Write-Host "No changes to commit" -ForegroundColor Yellow
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "No changes to commit." -ForegroundColor Yellow
+}
 
 git push origin $Branch
+
+Set-Location $ProjectRoot
+
+# Delete generated files from root
+Write-Host ""
+Write-Host "=== Cleaning up generated files ===" -ForegroundColor Yellow
+Remove-Item $ChartTgzFile -Force -ErrorAction SilentlyContinue
+Remove-Item $IndexYamlFile -Force -ErrorAction SilentlyContinue
+Write-Host "Removed generated files from root." -ForegroundColor Green
 
 Write-Host ""
 Write-Host "=== Chart published successfully ===" -ForegroundColor Green
@@ -146,6 +160,6 @@ Write-Host "  2. Source: Deploy from a branch" -ForegroundColor White
 Write-Host "  3. Branch: pages (root /)" -ForegroundColor White
 Write-Host "  4. Save" -ForegroundColor White
 
-# Cleanup
+# Cleanup temp directory
 Set-Location $ProjectRoot
-Remove-Item -Path $TempDir -Recurse -Force
+Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue

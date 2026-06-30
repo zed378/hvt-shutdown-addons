@@ -3,10 +3,11 @@
 # Usage: ./scripts/publish_to_github.sh
 #
 # This script:
-# 1. Packages the Helm chart
-# 2. Generates index.yaml with correct GitHub Pages URL
-# 3. Pushes to the 'pages' branch
-# 4. GitHub Pages will serve the files automatically
+# 1. Packages the Helm chart to root directory
+# 2. Generates index.yaml in root directory
+# 3. Checkout only generated files to 'pages' branch via git worktree
+# 4. Deletes generated files from root after publish
+# 5. GitHub Pages will serve the files automatically
 #
 # Requirements:
 #   - GitHub CLI (gh) authenticated: gh auth login
@@ -32,7 +33,10 @@ HELM_REPO_URL="https://${OWNER}.github.io/${REPO_NAME}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR/.."
 CHART_DIR="$PROJECT_ROOT/Charts"
-OUTPUT_DIR="$SCRIPT_DIR/../charts-output"
+
+# Generated files in root directory
+CHART_TGZ_FILE="$PROJECT_ROOT/node-shutdown-1.0.0.tgz"
+INDEX_YAML_FILE="$PROJECT_ROOT/index.yaml"
 TEMP_DIR=$(mktemp -d)
 
 echo "=== GitHub Helm Repository Publisher ==="
@@ -55,72 +59,74 @@ if ! gh auth status &> /dev/null; then
     echo "Error: GitHub CLI is not authenticated. Run 'gh auth login' first."
     exit 1
 fi
+echo "GitHub CLI: Authenticated"
+
+# Check git remote
+remoteUrl=$(git remote get-url origin 2>&1)
+if [ $? -ne 0 ]; then
+    echo "Error: No git remote 'origin' configured."
+    exit 1
+fi
+echo "Git remote: $remoteUrl"
 
 echo "Owner: $OWNER"
 echo "Repo: $REPO_NAME"
 echo ""
 
-# Confirm
-read -p "Publish Helm chart to GitHub? (y/n): " CONFIRM
-if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
-    echo "Cancelled."
-    rm -rf "$TEMP_DIR"
-    exit 0
-fi
+# Package the Helm chart to root directory
+echo "=== Packaging Helm chart to root ==="
+helm package "$CHART_DIR" --destination "$PROJECT_ROOT"
 
-# Package the Helm chart
-echo "=== Packaging Helm chart ==="
-mkdir -p "$OUTPUT_DIR"
-helm package "$CHART_DIR" --destination "$OUTPUT_DIR"
-
-# Find the packaged chart
-CHART_TGZ=$(ls "$OUTPUT_DIR"/*.tgz 2>/dev/null | head -1)
-if [ -z "$CHART_TGZ" ]; then
+if [ ! -f "$CHART_TGZ_FILE" ]; then
     echo "Error: Failed to package Helm chart."
     rm -rf "$TEMP_DIR"
     exit 1
 fi
 
-CHART_FILENAME=$(basename "$CHART_TGZ")
+CHART_FILENAME=$(basename "$CHART_TGZ_FILE")
 echo "Chart: $CHART_FILENAME"
 
-# Generate index.yaml with correct URL
-echo "Generating index.yaml..."
-helm repo index --url "$HELM_REPO_URL" "$OUTPUT_DIR"
+# Generate index.yaml in root directory
+echo "Generating index.yaml in root..."
+helm repo index --url "$HELM_REPO_URL" "$PROJECT_ROOT"
 
 echo ""
 echo "=== index.yaml content ==="
-cat "$OUTPUT_DIR/index.yaml"
+cat "$INDEX_YAML_FILE"
 echo ""
 
-# Clone the target branch
-echo "=== Cloning branch '$BRANCH' ==="
-CLONE_DIR="$TEMP_DIR/clone"
-if git clone --branch "$BRANCH" --single-branch "$GITHUB_REPO" "$CLONE_DIR" 2>/dev/null; then
-    echo "Branch '$BRANCH' found."
+# Checkout generated files to pages branch
+echo "=== Checking out generated files to '$BRANCH' ==="
+PAGES_DIR="$TEMP_DIR/pages"
+
+# Clone pages branch directly
+if git clone --branch "$BRANCH" --single-branch "$GITHUB_REPO" "$PAGES_DIR" 2>/dev/null; then
+    echo "Cloned $BRANCH branch."
 else
-    echo "Branch '$BRANCH' not found. Creating new branch from main..."
-    git clone "$GITHUB_REPO" "$CLONE_DIR"
-    cd "$CLONE_DIR"
-    git checkout main
-    git checkout -b "$BRANCH"
-    cd "$PROJECT_ROOT"
+    echo "Error: Cannot clone $BRANCH branch."
+    rm -rf "$TEMP_DIR"
+    exit 1
 fi
 
-# Create charts directory in clone
-mkdir -p "$CLONE_DIR/charts"
+cd "$PAGES_DIR"
 
-# Copy chart files
-cp "$CHART_TGZ" "$CLONE_DIR/charts/"
-cp "$OUTPUT_DIR/index.yaml" "$CLONE_DIR/"
-
-# Commit and push
-cd "$CLONE_DIR"
-git add charts/$CHART_FILENAME index.yaml
+# Copy generated files
+cp "$CHART_TGZ_FILE" "$PAGES_DIR/"
+cp "$INDEX_YAML_FILE" "$PAGES_DIR/"
+git add $CHART_FILENAME index.yaml
 git config user.email "${OWNER}@users.noreply.github.com"
 git config user.name "$OWNER"
 git commit -m "Add helm chart $CHART_FILENAME" --allow-empty || echo "No changes to commit"
 git push origin "$BRANCH"
+
+cd "$PROJECT_ROOT"
+
+# Delete generated files from root
+echo ""
+echo "=== Cleaning up generated files ==="
+rm -f "$CHART_TGZ_FILE"
+rm -f "$INDEX_YAML_FILE"
+echo "Removed generated files from root."
 
 echo ""
 echo "=== Chart published successfully ==="
