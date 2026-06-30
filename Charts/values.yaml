@@ -1,11 +1,12 @@
 auth:
   # IMPORTANT: For raw kubectl apply, encode manually: echo -n "your-secret-token" | base64
   # For Helm, the token is automatically base64 encoded via {{ .Values.auth.token | b64enc }}
+  # Use a strong, random token: openssl rand -hex 32
   token: "this-is-a-secret-token-string"
 
 image:
-  registry: "your-registry"
-  repository: "node-shutdown-api"
+  registry: "zed378"
+  repository: "hvt-shutdown"
   tag: "latest"
   pullPolicy: "IfNotPresent"
 
@@ -15,17 +16,21 @@ daemonset:
   serviceAccount: "node-shutdown-sa"
   hostNetwork: true
   privileged: true
+  hostIPC: false
+  hostPID: false
   labels:
     app: "node-shutdown"
+    version: "v1"
 
 rbac:
   clusterRoleName: "node-shutdown-role"
   clusterRoleBindingName: "node-shutdown-binding"
   serviceAccountName: "node-shutdown-sa"
   serviceAccountNamespace: "harvester-system"
+  # Only required permissions - least privilege
   apiGroups_kubevirt: ["kubevirt.io"]
-  resources_kubevirt: ["virtualmachines", "virtualmachineinstances"]
-  verbs_kubevirt: ["get", "list", "patch", "update"]
+  resources_kubevirt: ["virtualmachineinstances"]
+  verbs_kubevirt: ["get", "list"]
   apiGroups_core: [""]
   resources_core: ["pods"]
   verbs_core: ["list", "delete"]
@@ -55,7 +60,41 @@ hostPath:
   path: "/"
   type: "Directory"
 
+# Security hardening
 podSecurity:
+  # Pod security standards - restrict privileged access
+  runAsNonRoot: false # Node shutdown requires root for systemctl
+  readOnlyRootFilesystem: false # Need to write logs
+  allowPrivilegeEscalation: false
+  drop_capabilities:
+    - ALL
   nodeSelector: {}
-  tolerations: []
+  tolerations:
+    - effect: NoSchedule
+      key: node-role.kubernetes.io/node
+      operator: Exists
   affinity: {}
+
+# Rate limiting
+rateLimiting:
+  enabled: true
+  maxRequestsPerMinute: 10
+
+# Audit logging
+auditLogging:
+  enabled: true
+  path: "/var/log/shutdown-audit.log"
+
+# Resource limits
+resources:
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+
+# Pod disruption budget (optional)
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1

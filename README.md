@@ -1,10 +1,19 @@
-# Node Shutdown API
+# hvt-shutdown-addons
 
-A Kubernetes service that safely shuts down nodes in a Harvester cluster by terminating virtual machine workloads and powering off the host system.
+Secure node shutdown service for Harvester clusters. Deploys as a DaemonSet to safely power off Harvester nodes by gracefully terminating VM workloads.
 
 ## Overview
 
-This service runs as a DaemonSet on each node in the cluster. It exposes an HTTP endpoint that accepts authenticated shutdown requests, gracefully terminates all running `virt-launcher` pods on the target node, and then powers off the host system.
+This service runs as a DaemonSet on each node in a Harvester cluster. It exposes an HTTP endpoint that accepts authenticated shutdown requests, gracefully terminates all running `virt-launcher` pods on the target node, and then powers off the host system.
+
+**Repository:** [github.com/zed378/hvt-shutdown-addons](https://github.com/zed378/hvt-shutdown-addons)
+
+## Features
+
+- **Security Hardening**: Rate limiting, audit logging, concurrent shutdown protection
+- **Harvester Integration**: Designed for Harvester cluster management
+- **Helm Chart**: Centralized configuration via `Charts/values.yaml`
+- **Add-on Ready**: Can be deployed as a Harvester add-on
 
 ## Project Structure
 
@@ -12,20 +21,49 @@ This service runs as a DaemonSet on each node in the cluster. It exposes an HTTP
 .
 ├── .dockerignore
 ├── .gitignore
+├── .editorconfig
 ├── Dockerfile
+├── LICENSE
 ├── README.md
 ├── requirements.txt
 ├── app/
 │   ├── __init__.py
-│   └── main.py              # FastAPI application
+│   └── main.py              # FastAPI application with security hardening
 ├── Charts/
-│   ├── daemonset.yaml        # Environment variable snippets
-│   ├── deployment.yaml       # Full DaemonSet + RBAC manifest
-│   ├── secret.yaml           # Auth token secret
-│   └── values.yaml           # Helm values
+│   ├── daemonset.yaml        # Original environment variable snippets
+│   ├── deployment.yaml       # Full DaemonSet + RBAC manifest (Helm template)
+│   ├── secret.yaml           # Auth token secret (Helm template)
+│   ├── addon.yaml            # Harvester add-on configuration
+│   └── values.yaml           # Centralized Helm values
 └── tests/
     ├── __init__.py
     └── test_main.py          # Unit tests
+```
+
+## Quick Start
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/zed378/hvt-shutdown-addons.git
+cd hvt-shutdown-addons
+```
+
+### 2. Build & Push Docker Image
+
+```bash
+docker build -t your-registry/node-shutdown-api:latest .
+docker push your-registry/node-shutdown-api:latest
+```
+
+### 3. Configure & Deploy with Helm
+
+```bash
+# Edit values to customize
+vim Charts/values.yaml
+
+# Deploy to your Harvester cluster
+helm install node-shutdown ./Charts/
 ```
 
 ## API Endpoints
@@ -38,7 +76,8 @@ Liveness probe endpoint. Returns `200 OK` when the service is running.
 
 ```json
 {
-  "status": "ok"
+  "status": "ok",
+  "timestamp": "2026-06-30T04:21:00+00:00"
 }
 ```
 
@@ -50,7 +89,8 @@ Readiness probe endpoint. Returns `200 OK` when the service is ready to accept t
 
 ```json
 {
-  "status": "ready"
+  "status": "ready",
+  "timestamp": "2026-06-30T04:21:00+00:00"
 }
 ```
 
@@ -71,98 +111,186 @@ Authorization: Bearer <AUTH_TOKEN>
 
 ```json
 {
-  "status": "Shutdown sequence successfully initiated."
+  "status": "Shutdown sequence successfully initiated",
+  "timestamp": "2026-06-30T04:21:00+00:00"
 }
 ```
 
-**Behavior:**
+**Error Responses:**
 
-1. Lists all running pods on the current node
-2. Identifies `virt-launcher-*` pods (Harvester VM workloads)
-3. Deletes each virt-launcher pod with configurable grace period (default: 10s)
-4. Attempts host shutdown via chroot → systemctl → /sbin/shutdown (fallback chain)
+| Status Code | Description                             |
+| ----------- | --------------------------------------- |
+| 401         | Invalid or missing authentication token |
+| 409         | Shutdown already in progress            |
+| 429         | Rate limit exceeded                     |
+| 500         | Internal server error                   |
+
+**Shutdown Behavior:**
+
+1. Rate limit check (configurable requests per minute)
+2. Concurrent shutdown protection (prevents multiple simultaneous shutdowns)
+3. Lists all running pods on the current node
+4. Identifies `virt-launcher-*` pods (Harvester VM workloads)
+5. Deletes each virt-launcher pod with configurable grace period (default: 10s)
+6. Attempts host shutdown via fallback chain:
+   - `chroot /host systemctl poweroff`
+   - `systemctl poweroff`
+   - `/sbin/shutdown -h now`
+
+## Security Improvements
+
+### Authentication & Authorization
+
+- **Bearer token** with constant-time comparison (`secrets.compare_digest`)
+- **Audit logging** of all authentication attempts
+- **Rate limiting** to prevent brute-force attacks
+
+### Pod Security
+
+- **hostIPC disabled**: Prevents inter-process communication host access
+- **hostPID disabled**: Prevents PID namespace host access
+- **Privilege escalation blocked**: `allowPrivilegeEscalation: false`
+- **Capabilities dropped**: All Linux capabilities dropped (`DROP ALL`)
+
+### Rate Limiting
+
+- Configurable requests per minute (default: 10 per minute)
+- Returns `429 Too Many Requests` when limit exceeded
+
+### Audit Logging
+
+- All requests logged with timestamp, method, path, status, duration
+- Logs written to both stdout and file
+- File path configurable via environment variable
+
+### Concurrent Shutdown Protection
+
+- Prevents multiple simultaneous shutdown requests
+- Returns `409 Conflict` if shutdown already in progress
 
 ## Configuration
 
-### Environment Variables
+All values are centralized in `Charts/values.yaml`:
 
-| Variable               | Description                             | Required | Default |
-| ---------------------- | --------------------------------------- | -------- | ------- |
-| `NODE_NAME`            | Kubernetes node name (auto-filled)      | Yes      | -       |
-| `AUTH_TOKEN`           | Bearer token for API authentication     | Yes      | -       |
-| `GRACE_PERIOD_SECONDS` | Pod termination grace period in seconds | No       | 10      |
+### Authentication
 
-### Kubernetes Secret
-
-Create the auth secret before deploying:
-
-```bash
-echo -n "your-secret-token" | base64
-# Apply the secret from Charts/secret.yaml (update the base64 value)
-kubectl apply -f Charts/secret.yaml
+```yaml
+auth:
+  # Generate strong token: openssl rand -hex 32
+  token: "your-secret-token-string"
 ```
 
-## Deployment
+### Image Configuration
+
+```yaml
+image:
+  registry: "your-registry"
+  repository: "node-shutdown-api"
+  tag: "latest"
+  pullPolicy: "IfNotPresent"
+```
+
+### Security Settings
+
+```yaml
+daemonset:
+  hostNetwork: true # Required for node access
+  hostIPC: false # Disabled for security
+  hostPID: false # Disabled for security
+
+podSecurity:
+  allowPrivilegeEscalation: false
+  drop_capabilities:
+    - ALL
+```
+
+### Rate Limiting
+
+```yaml
+rateLimiting:
+  enabled: true
+  maxRequestsPerMinute: 10
+```
+
+### Audit Logging
+
+```yaml
+auditLogging:
+  enabled: true
+  path: "/var/log/shutdown-audit.log"
+```
+
+### Resource Limits
+
+```yaml
+resources:
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+```
+
+### Environment Variables
+
+| Variable                  | Description                             | Required | Default                     |
+| ------------------------- | --------------------------------------- | -------- | --------------------------- |
+| `NODE_NAME`               | Kubernetes node name (auto-filled)      | Yes      | -                           |
+| `AUTH_TOKEN`              | Bearer token for API authentication     | Yes      | -                           |
+| `GRACE_PERIOD_SECONDS`    | Pod termination grace period in seconds | No       | 10                          |
+| `AUDIT_ENABLED`           | Enable audit logging                    | No       | true                        |
+| `AUDIT_LOG_PATH`          | Path to audit log file                  | No       | /var/log/shutdown-audit.log |
+| `MAX_REQUESTS_PER_MINUTE` | Rate limit threshold                    | No       | 10                          |
+
+## Deployment Options
 
 ### Prerequisites
 
 - Harvester Kubernetes cluster
 - `kubectl` configured with cluster access
 - Docker or Podman for building the image
+- Helm 3.x (for Helm deployment)
 
-### Build & Deploy
+### Option 1: Deploy with Helm (Recommended)
 
 ```bash
-# Build the Docker image
-docker build -t your-registry/node-shutdown-api:latest .
+# Edit configuration
+vim Charts/values.yaml
 
-# Push to registry
-docker push your-registry/node-shutdown-api:latest
+# Deploy
+helm install node-shutdown ./Charts/
+
+# Upgrade
+helm upgrade node-shutdown ./Charts/
+
+# Dry run to preview
+helm install --dry-run --debug node-shutdown ./Charts/
+```
+
+### Option 2: Deploy with kubectl (Raw YAML)
+
+```bash
+# Generate base64 token
+TOKEN=$(echo -n "your-secret-token" | base64)
 
 # Apply the manifests
 kubectl apply -f Charts/secret.yaml
 kubectl apply -f Charts/deployment.yaml
 ```
 
-### Deploy with Helm
+### Option 3: Deploy as Harvester Add-on
 
-All configuration values are centralized in `Charts/values.yaml`. Update this file and run:
+For Harvester add-on deployment, use the `Charts/addon.yaml` configuration:
 
-```bash
-# Customize values in Charts/values.yaml
-#   - auth.token          : Authentication bearer token (auto base64 encoded)
-#   - image.registry      : Container image registry
-#   - image.repository    : Container image name
-#   - image.tag           : Container image tag
-#   - gracePeriodSeconds  : Pod termination grace period in seconds
-
-helm install node-shutdown ./Charts/
-
-# Or upgrade existing release
-helm upgrade node-shutdown ./Charts/
-
-# Dry run to preview rendered manifests
-helm install --dry-run --debug node-shutdown ./Charts/
-```
-
-### Deploy with kubectl (raw YAML)
-
-For non-Helm deployments, edit `Charts/secret.yaml` manually with base64-encoded token:
-
-```bash
-# Generate base64 token
-TOKEN=$(echo -n "your-secret-token" | base64)
-
-# Update secret.yaml with the encoded token, then apply:
-kubectl apply -f Charts/secret.yaml
-kubectl apply -f Charts/deployment.yaml
-```
-
-## Security Considerations
-
-- **Authentication:** Uses Bearer token with constant-time comparison (`secrets.compare_digest`) to prevent timing attacks. Consider upgrading to mTLS or OIDC for production.
-- **Privileged Container:** The DaemonSet runs in privileged mode to access host system shutdown. Restrict this to trusted nodes only.
-- **Network:** Uses `hostNetwork: true` — ensure network policies restrict access to the service.
+1. Build and push the Docker image
+2. Update `Charts/values.yaml` with your image settings
+3. Package the Helm chart:
+   ```bash
+   helm package Charts/
+   ```
+4. Create a Helm repository or use a chart URL
+5. Configure Harvester to install the add-on
 
 ## Testing
 
@@ -179,14 +307,34 @@ pytest tests/
 
 - Check that the ServiceAccount has correct RBAC permissions
 - Verify the image pull policy and registry credentials
+- Check node taints and tolerations
 
 ### Shutdown fails
 
 - Check logs: `kubectl logs -n harvester-system -l app=node-shutdown`
 - Verify `AUTH_TOKEN` matches the one sent in requests
 - Check that `NODE_NAME` is correctly populated
+- Verify node has proper shutdown permissions
 
-### Port unreachable
+### Rate limit exceeded
 
-- Ensure the container port (8080) matches your Dockerfile `EXPOSE` directive
-- Verify the service/port configuration in your Kubernetes manifests
+- Increase the limit in `values.yaml`:
+  ```yaml
+  rateLimiting:
+    maxRequestsPerMinute: 20
+  ```
+
+### Audit logs not appearing
+
+- Verify audit logging is enabled in `values.yaml`
+- Check the audit log volume is mounted correctly
+- Check container logs: `kubectl logs -n harvester-system <pod-name>`
+
+## Security Considerations
+
+- **Authentication**: Uses Bearer token with constant-time comparison
+- **Privileged Container**: Requires privileged mode for host shutdown
+- **Network**: Uses `hostNetwork: true` — restrict access via network policies
+- **Token Security**: Use strong, random tokens (`openssl rand -hex 32`)
+- **Audit Logging**: Enable for production environments
+- **Rate Limiting**: Configure based on your operational needs
