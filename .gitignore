@@ -58,10 +58,6 @@ env/
 .env
 .env.local
 
-# Kubernetes / Helm
-Charts/*.yaml
-!Charts/values.yaml
-
 # Docker
 *.log
 .docker/

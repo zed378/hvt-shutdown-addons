@@ -1,0 +1,153 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.rbac.serviceAccountName }}
+  namespace: {{ .Values.rbac.serviceAccountNamespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Values.rbac.clusterRoleName }}
+rules:
+  - apiGroups:
+{{ toYaml .Values.rbac.apiGroups_kubevirt | nindent 6 }}
+    resources:
+{{ toYaml .Values.rbac.resources_kubevirt | nindent 6 }}
+    verbs:
+{{ toYaml .Values.rbac.verbs_kubevirt | nindent 6 }}
+  - apiGroups:
+{{ toYaml .Values.rbac.apiGroups_core | nindent 6 }}
+    resources:
+{{ toYaml .Values.rbac.resources_core | nindent 6 }}
+    verbs:
+{{ toYaml .Values.rbac.verbs_core | nindent 6 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.rbac.clusterRoleBindingName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.rbac.serviceAccountName }}
+    namespace: {{ .Values.rbac.serviceAccountNamespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ .Values.rbac.clusterRoleName }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Values.daemonset.name }}
+  namespace: {{ .Values.daemonset.namespace }}
+  labels:
+    {{- range $key, $value := .Values.daemonset.labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- range $key, $value := .Values.daemonset.labels }}
+      {{ $key }}: {{ $value | quote }}
+      {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- range $key, $value := .Values.daemonset.labels }}
+        {{ $key }}: {{ $value | quote }}
+        {{- end }}
+      annotations:
+        {{- if .Values.auditLogging.enabled }}
+        audit.logging/enabled: "true"
+        {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.rbac.serviceAccountName }}
+      hostNetwork: {{ .Values.daemonset.hostNetwork }}
+      hostIPC: {{ .Values.daemonset.hostIPC }}
+      hostPID: {{ .Values.daemonset.hostPID }}
+      containers:
+        - name: webhook
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            privileged: {{ .Values.daemonset.privileged }}
+            allowPrivilegeEscalation: {{ .Values.podSecurity.allowPrivilegeEscalation }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.healthCheck.liveness.path }}
+              port: {{ .Values.healthCheck.liveness.port }}
+            initialDelaySeconds: {{ .Values.healthCheck.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthCheck.liveness.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.healthCheck.readiness.path }}
+              port: {{ .Values.healthCheck.readiness.port }}
+            initialDelaySeconds: {{ .Values.healthCheck.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthCheck.readiness.periodSeconds }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: GRACE_PERIOD_SECONDS
+              value: "{{ .Values.gracePeriodSeconds }}"
+            - name: AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.name }}
+                  key: {{ .Values.secret.key }}
+            - name: AUDIT_ENABLED
+              value: "{{ .Values.auditLogging.enabled }}"
+            - name: AUDIT_LOG_PATH
+              value: "{{ .Values.auditLogging.path }}"
+            - name: MAX_REQUESTS_PER_MINUTE
+              value: "{{ .Values.rateLimiting.maxRequestsPerMinute }}"
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+          volumeMounts:
+            - name: {{ .Values.hostPath.name }}
+              mountPath: {{ .Values.hostPath.mountPath }}
+            - name: audit-logs
+              mountPath: {{ .Values.auditLogging.path | dirname }}
+      volumes:
+        - name: {{ .Values.hostPath.name }}
+          hostPath:
+            path: {{ .Values.hostPath.path }}
+            type: {{ .Values.hostPath.type }}
+        - name: audit-logs
+          emptyDir: {}
+{{- with .Values.podSecurity.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.podSecurity.tolerations }}
+      tolerations:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.podSecurity.affinity }}
+      affinity:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+---
+{{- if .Values.nodePort.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.daemonset.name }}-nodeport
+  namespace: {{ .Values.daemonset.namespace }}
+  labels:
+    {{- range $key, $value := .Values.daemonset.labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+spec:
+  type: NodePort
+  selector:
+    {{- range $key, $value := .Values.daemonset.labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.nodePort.port }}
+      targetPort: {{ .Values.nodePort.targetPort }}
+      nodePort: {{ .Values.nodePort.nodePort }}
+{{- end }}
