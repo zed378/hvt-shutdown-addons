@@ -86,6 +86,7 @@ rateLimiting:
 auditLogging:
   enabled: true
   path: "/var/log/shutdown-audit.log"
+  mountPath: "/var/log"
 
 # Resource limits
 resources:
