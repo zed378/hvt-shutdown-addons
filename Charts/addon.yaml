@@ -2,15 +2,15 @@ apiVersion: harvesterhci.io/v1beta1
 kind: Addon
 metadata:
   name: node-shutdown
-  namespace: harvester-local-storage # Use harvester-local-storage for local addons or harvester-system for global
+  namespace: harvester-system # Use harvester-system namespace for addons to show up in the Harvester UI
   labels:
     # Remove this label for production (marks as experimental in UI)
-    # Add-on.harvesterhci.io/experimental: "true"
+    # addon.harvesterhci.io/experimental: "true"
 spec:
   # Set to true to automatically install
   enabled: false
   # Helm chart repository URL
-  repo: "https://charts.harvester-system.svc"
+  repo: "https://zed378.github.io/hvt-shutdown-addons/"
   # Chart version
   version: "1.0.0"
   # Chart name (must match chart.yaml name)
@@ -19,13 +19,18 @@ spec:
   # IMPORTANT: This only passes values, the chart itself must be in the repository
   valuesContent: |-
     auth:
-      token: "CHANGE-ME-GENERATE-WITH-openssl-rand-hex-32"
+      # IMPORTANT: Generate a strong, random token before deployment:
+      #   openssl rand -hex 32
+      # For Helm, the token is automatically base64 encoded via {{ .Values.auth.token | b64enc }}
+      # WARNING: This token MUST be set before deployment. An empty token will cause 500 errors.
+      # TODO: Replace with your own secure random token before deploying
+      token: "pQLeDmkxhMpyaYUU3v143bVuZC9BgGczRKWjM8HiRt9rU1EZ3SzjZ063ZdiwYFap"
 
     image:
-      registry: "your-registry"
-      repository: "node-shutdown-api"
+      registry: "zed378"
+      repository: "hvt-shutdown"
       tag: "latest"
-      pullPolicy: "IfNotPresent"
+      pullPolicy: "Always"
 
     daemonset:
       name: "node-shutdown-webhook"
@@ -34,7 +39,7 @@ spec:
       hostNetwork: true
       privileged: true
       hostIPC: false
-      hostPID: false
+      hostPID: true
       labels:
         app: "node-shutdown"
         version: "v1"
@@ -44,6 +49,7 @@ spec:
       clusterRoleBindingName: "node-shutdown-binding"
       serviceAccountName: "node-shutdown-sa"
       serviceAccountNamespace: "harvester-system"
+      # Only required permissions - least privilege
       apiGroups_kubevirt: ["kubevirt.io"]
       resources_kubevirt: ["virtualmachineinstances"]
       verbs_kubevirt: ["get", "list"]
@@ -76,10 +82,12 @@ spec:
       path: "/"
       type: "Directory"
 
+    # Security hardening
     podSecurity:
-      runAsNonRoot: false
-      readOnlyRootFilesystem: false
-      allowPrivilegeEscalation: false
+      # Pod security standards - restrict privileged access
+      runAsNonRoot: false # Node shutdown requires root for systemctl
+      readOnlyRootFilesystem: false # Need to write logs
+      allowPrivilegeEscalation: true # Required when privileged: true
       drop_capabilities:
         - ALL
       nodeSelector: {}
@@ -89,14 +97,18 @@ spec:
           operator: Exists
       affinity: {}
 
+    # Rate limiting
     rateLimiting:
       enabled: true
       maxRequestsPerMinute: 10
 
+    # Audit logging
     auditLogging:
       enabled: true
       path: "/var/log/shutdown-audit.log"
+      mountPath: "/var/log"
 
+    # Resource limits
     resources:
       limits:
         cpu: "500m"
@@ -104,3 +116,28 @@ spec:
       requests:
         cpu: "100m"
         memory: "128Mi"
+
+    # Pod disruption budget (optional)
+    podDisruptionBudget:
+      enabled: false
+      minAvailable: 1
+
+    # NodePort service configuration
+    nodePort:
+      enabled: true
+      # Port to expose the service (default: 30088)
+      port: 30088
+      # Target port (container port)
+      targetPort: 8080
+      # Node port range (30000-32767)
+      nodePort: 30088
+
+    # Max time to wait for VMs to fully shut down before baremetal poweroff (seconds)
+    vmShutdownTimeout: 120
+
+    # Network policy (optional - restricts incoming traffic)
+    networkPolicy:
+      enabled: false
+      # When enabled, only allows ingress on the health check port
+      # For production, consider adding source CIDR restrictions
+      ingressFromCidr: null # e.g., "10.0.0.0/8"

@@ -123,7 +123,7 @@ spec:
 kubectl apply -f Charts/addon.yaml
 
 # Enable the add-on (toggle enabled: true in addon.yaml, or:)
-kubectl patch addon node-shutdown -n harvester-local-storage --type=json -p '[{"op": "replace", "path": "/spec/enabled", "value": true}]'
+kubectl patch addon node-shutdown -n harvester-system --type=json -p '[{"op": "replace", "path": "/spec/enabled", "value": true}]'
 ```
 
 ## Architecture
@@ -377,7 +377,7 @@ helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system
 
 ```bash
 # Check addon status
-kubectl get addon -n harvester-local-storage
+kubectl get addon -n harvester-system
 
 # Check daemonset pods
 kubectl get pods -n harvester-system -l app=node-shutdown
@@ -386,7 +386,7 @@ kubectl get pods -n harvester-system -l app=node-shutdown
 kubectl logs -n harvester-system -l app=node-shutdown
 
 # Check addon events
-kubectl describe addon node-shutdown -n harvester-local-storage
+kubectl describe addon node-shutdown -n harvester-system
 
 # Test health endpoints
 kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/healthz

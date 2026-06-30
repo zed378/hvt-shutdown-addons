@@ -19,3 +19,8 @@ docker-compose*.yml
 *.egg-info/
 Charts
 tests
+
+# agents
+.kilo
+.calude
+.gemini

@@ -19,7 +19,7 @@ daemonset:
   hostNetwork: true
   privileged: true
   hostIPC: false
-  hostPID: false
+  hostPID: true
   labels:
     app: "node-shutdown"
     version: "v1"

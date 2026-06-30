@@ -7,6 +7,7 @@ import time
 import asyncio
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+import threading
 from threading import Lock
 
 from fastapi import FastAPI, Depends, HTTPException, Request, status
@@ -172,10 +173,17 @@ async def audit_middleware(request: Request, call_next):
     start_time = time.time()
     response = await call_next(request)
     duration = time.time() - start_time
+    
+    # Determine actual client IP (checking proxy headers first)
+    forwarded = request.headers.get("x-forwarded-for")
+    real_ip = request.headers.get("x-real-ip")
+    client_host = request.client.host if request.client else "unknown"
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (real_ip.strip() if real_ip else client_host)
+    
     logger.info(
         f"Audit: method={request.method} path={request.url.path} "
         f"status={response.status_code} duration={duration:.3f}s "
-        f"client={request.client.host if request.client else 'unknown'}"
+        f"client={client_ip} proxy={client_host}"
     )
     return response
 
@@ -218,8 +226,14 @@ async def k8s_readiness_check():
             content={"status": "unavailable", "detail": "Kubernetes client not initialized"},
         )
     try:
-        # Simple API call to verify connectivity
-        k8s_core.list_node()
+        # Simple API call to verify connectivity (using least-privilege namespaced pod list)
+        namespace = "harvester-system"
+        try:
+            with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace", "r") as f:
+                namespace = f.read().strip()
+        except Exception:
+            pass
+        k8s_core.list_namespaced_pod(namespace=namespace, limit=1)
         return {"status": "ready", "k8s": "connected", "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         return JSONResponse(
@@ -230,10 +244,18 @@ async def k8s_readiness_check():
 
 @app.post("/system/shutdown", dependencies=[Depends(verify_token)])
 async def execute_shutdown(request: Request):
-    """Execute graceful shutdown with safety checks."""
+    """Execute graceful shutdown — returns immediately, runs in background thread."""
     global _shutdown_in_progress
 
-    # Atomic check-and-set using lock to prevent race conditions
+    # --- Validation (synchronous, must complete before returning) ---
+
+    if not NODE_NAME:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="NODE_NAME environment variable is missing",
+        )
+
+    # Atomic check-and-set to prevent concurrent shutdown attempts
     with _shutdown_lock:
         if _shutdown_in_progress:
             logger.warning("Shutdown already in progress, ignoring request")
@@ -243,100 +265,139 @@ async def execute_shutdown(request: Request):
             )
         _shutdown_in_progress = True
 
+    # Start background shutdown thread (non-blocking)
+    thread = threading.Thread(
+        target=run_shutdown_sequence,
+        daemon=True,
+        name="shutdown-daemon",
+    )
+    thread.start()
+
+    return {"status": "Shutdown sequence initiated, running in background", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+def run_shutdown_sequence():
+    """Run the full shutdown sequence in a background daemon thread.
+
+    This function runs to completion (or until all methods fail).
+    The _shutdown_in_progress lock is ALWAYS reset in the finally block.
+    """
     try:
-        if not NODE_NAME:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="NODE_NAME environment variable is missing",
-            )
-
-        logger.info(f"Initiating shutdown sequence on node {NODE_NAME}")
-
-        try:
-            pods = k8s_core.list_pod_for_all_namespaces(
-                field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
-            ).items
-            virt_launchers = [p for p in pods if p.metadata.name.startswith("virt-launcher-")]
-
-            if virt_launchers:
-                logger.info(f"Found {len(virt_launchers)} VM workloads, initiating graceful deletion")
-                for pod in virt_launchers:
-                    try:
-                        k8s_core.delete_namespaced_pod(
-                            name=pod.metadata.name,
-                            namespace=pod.metadata.namespace,
-                            body=client.V1DeleteOptions(grace_period_seconds=GRACE_PERIOD_SECONDS),
-                        )
-                        logger.info(f"Deleted virt-launcher pod: {pod.metadata.name}")
-                    except Exception as pod_error:
-                        logger.error(f"Failed to delete pod {pod.metadata.name}: {str(pod_error)}")
-
-                # Wait for all VMs to be fully terminated before proceeding
-                logger.info(f"Waiting for VMs to shut down (timeout: {VM_SHUTDOWN_TIMEOUT}s)...")
-                shutdown_start = time.time()
-                while time.time() - shutdown_start < VM_SHUTDOWN_TIMEOUT:
-                    remaining_pods = k8s_core.list_pod_for_all_namespaces(
-                        field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
-                    ).items
-                    remaining_vms = [p for p in remaining_pods if p.metadata.name.startswith("virt-launcher-")]
-                    if not remaining_vms:
-                        logger.info("All VMs have been shut down successfully")
-                        break
-                    logger.info(f"Waiting for {len(remaining_vms)} VM(s) to shut down...")
-                    time.sleep(5)
-                else:
-                    # Timeout reached - log remaining VMs but proceed with shutdown
-                    remaining_pods = k8s_core.list_pod_for_all_namespaces(
-                        field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
-                    ).items
-                    remaining_vms = [p for p in remaining_pods if p.metadata.name.startswith("virt-launcher-")]
-                    if remaining_vms:
-                        vm_names = [p.metadata.name for p in remaining_vms]
-                        logger.warning(f"Timeout reached. {len(remaining_vms)} VM(s) still running: {vm_names}. Proceeding with node shutdown anyway.")
-                    else:
-                        logger.info("All VMs shut down within timeout period")
-            else:
-                logger.info("No VM workloads found on this node")
-
-        except Exception as pods_error:
-            logger.error(f"Failed to list/delete pods: {str(pods_error)}")
-            raise
-
-        # Proceed to baremetal shutdown
-        logger.info("Proceeding with baremetal poweroff...")
-
-        # Attempt host shutdown with fallback mechanisms
-        shutdown_methods = [
-            {"name": "chroot systemctl", "cmd": ["chroot", "/host", "systemctl", "poweroff", "--force"]},
-            {"name": "systemctl", "cmd": ["systemctl", "poweroff", "--force"]},
-            {"name": "shutdown command", "cmd": ["/sbin/shutdown", "-h", "now"]},
-        ]
-
-        shutdown_success = False
-        for method in shutdown_methods:
-            try:
-                logger.info(f"Attempting shutdown via {method['name']}")
-                subprocess.run(method["cmd"], check=True, timeout=30)
-                shutdown_success = True
-                logger.info(f"Shutdown initiated successfully via {method['name']}")
-                break
-            except subprocess.CalledProcessError as e:
-                logger.warning(f"{method['name']} failed: {e}")
-            except subprocess.TimeoutExpired:
-                logger.warning(f"{method['name']} timed out")
-
-        if not shutdown_success:
-            logger.error("All shutdown methods failed")
-            raise RuntimeError("All shutdown methods failed")
-
-        return {"status": "Shutdown sequence successfully initiated", "timestamp": datetime.now(timezone.utc).isoformat()}
-
+        _execute_shutdown_logic()
     except Exception as e:
-        logger.error(f"Shutdown failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Background shutdown failed: {str(e)}")
     finally:
+        global _shutdown_in_progress
         with _shutdown_lock:
             _shutdown_in_progress = False
+
+
+def _execute_shutdown_logic():
+    """Core shutdown logic: VM deletion, wait, host poweroff.
+
+    Runs in a daemon thread. All blocking calls (subprocess, k8s API, time.sleep)
+    are safe here because this runs in a separate thread, not the event loop.
+    """
+    logger.info(f"Background shutdown sequence starting on node {NODE_NAME}")
+
+    try:
+        pods = k8s_core.list_pod_for_all_namespaces(
+            field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
+        ).items
+        virt_launchers = [p for p in pods if p.metadata.name.startswith("virt-launcher-")]
+
+        if virt_launchers:
+            logger.info(f"Found {len(virt_launchers)} VM workloads, initiating graceful deletion")
+            for pod in virt_launchers:
+                try:
+                    k8s_core.delete_namespaced_pod(
+                        name=pod.metadata.name,
+                        namespace=pod.metadata.namespace,
+                        body=client.V1DeleteOptions(grace_period_seconds=GRACE_PERIOD_SECONDS),
+                    )
+                    logger.info(f"Deleted virt-launcher pod: {pod.metadata.name}")
+                except Exception as pod_error:
+                    logger.error(f"Failed to delete pod {pod.metadata.name}: {str(pod_error)}")
+
+            # Wait for all VMs to terminate before proceeding to host poweroff
+            logger.info(f"Waiting for VMs to shut down (timeout: {VM_SHUTDOWN_TIMEOUT}s)...")
+            shutdown_start = time.time()
+            wait_timeout = max(VM_SHUTDOWN_TIMEOUT, 300)  # Cap absolute wait at 5 minutes
+            while time.time() - shutdown_start < wait_timeout:
+                remaining_pods = k8s_core.list_pod_for_all_namespaces(
+                    field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
+                ).items
+                remaining_vms = [p for p in remaining_pods if p.metadata.name.startswith("virt-launcher-")]
+                if not remaining_vms:
+                    logger.info("All VMs have been shut down successfully")
+                    break
+                logger.info(f"Waiting for {len(remaining_vms)} VM(s) to shut down...")
+                time.sleep(5)
+            else:
+                remaining_pods = k8s_core.list_pod_for_all_namespaces(
+                    field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
+                ).items
+                remaining_vms = [p for p in remaining_pods if p.metadata.name.startswith("virt-launcher-")]
+                if remaining_vms:
+                    vm_names = [p.metadata.name for p in remaining_vms]
+                    logger.warning(f"Timeout reached. {len(remaining_vms)} VM(s) still running: {vm_names}. Proceeding with node shutdown anyway.")
+                else:
+                    logger.info("All VMs shut down within timeout period")
+        else:
+            logger.info("No VM workloads found on this node")
+
+    except Exception as pods_error:
+        logger.error(f"Failed to list/delete VM pods: {str(pods_error)}")
+        raise
+
+    # Proceed to baremetal shutdown
+    logger.info("Proceeding with baremetal poweroff...")
+
+    # Shutdown commands: host binaries accessed via chroot /host
+    # Harvester (SUSE Linux Enterprise + K3s) may have binaries at different paths
+    chroot_commands = [
+        ["/host", "/usr/bin/systemctl", "poweroff", "--force"],
+        ["/host", "/usr/bin/poweroff", "--force"],
+        ["/host", "/usr/sbin/poweroff", "--force"],
+        ["/host", "/sbin/poweroff", "--force"],
+        ["/host", "/sbin/shutdown", "-h", "now"],
+        ["/host", "/usr/sbin/shutdown", "-h", "now"],
+    ]
+
+    for chroot_root, binary, *args in chroot_commands:
+        # Construct: chroot <root> <binary> <args>
+        full_cmd = ["chroot", chroot_root, binary] + args
+        try:
+            logger.info(f"Attempting shutdown via {binary}")
+            subprocess.run(full_cmd, check=True, timeout=30)
+            logger.info(f"Shutdown initiated successfully via {binary}")
+            return  # Success — node powers off
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.warning(f"Shutdown via {binary} failed: {e}")
+
+    # SysRq kernel fallback shutdown
+    logger.warning("All chroot shutdown commands failed. Attempting SysRq kernel fallback...")
+    try:
+        sysrq_path = "/host/proc/sys/kernel/sysrq"
+        if os.path.exists(sysrq_path):
+            with open(sysrq_path, "w") as f:
+                f.write("1\n")
+            logger.info("SysRq successfully enabled on host")
+            
+        trigger_path = "/host/proc/sysrq-trigger"
+        if os.path.exists(trigger_path):
+            with open(trigger_path, "w") as f:
+                f.write("o\n")
+            logger.info("SysRq poweroff command ('o') written to host trigger")
+            time.sleep(10)
+            return
+        else:
+            logger.error("SysRq trigger file /host/proc/sysrq-trigger does not exist")
+    except Exception as sysrq_err:
+        logger.error(f"SysRq kernel fallback failed: {sysrq_err}")
+
+    logger.error("All shutdown methods failed")
+    raise RuntimeError("All shutdown methods failed")
 
 
 if __name__ == "__main__":

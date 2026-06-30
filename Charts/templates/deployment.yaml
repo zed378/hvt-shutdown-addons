@@ -72,6 +72,10 @@ spec:
           securityContext:
             privileged: {{ .Values.daemonset.privileged }}
             allowPrivilegeEscalation: {{ .Values.podSecurity.allowPrivilegeEscalation }}
+            {{- if .Values.daemonset.privileged }}
+            runAsUser: 0
+            runAsGroup: 0
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.healthCheck.liveness.path }}
