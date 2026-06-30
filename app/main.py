@@ -4,6 +4,7 @@ import secrets
 import subprocess
 import logging
 import time
+import asyncio
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from threading import Lock
@@ -23,22 +24,41 @@ VM_SHUTDOWN_TIMEOUT = int(os.getenv("VM_SHUTDOWN_TIMEOUT", "120"))
 AUDIT_LOG_PATH = os.getenv("AUDIT_LOG_PATH", "/var/log/shutdown-audit.log")
 AUDIT_ENABLED = os.getenv("AUDIT_ENABLED", "true").lower() == "true"
 
+# Ensure audit log directory exists
+_audit_log_dir = os.path.dirname(AUDIT_LOG_PATH)
+if _audit_log_dir and not os.path.exists(_audit_log_dir):
+    try:
+        os.makedirs(_audit_log_dir, exist_ok=True)
+    except OSError:
+        # If we can't create the directory, fall back to current directory
+        AUDIT_LOG_PATH = os.path.join(".", os.path.basename(AUDIT_LOG_PATH))
+
 # Rate limiting configuration
 MAX_REQUESTS_PER_MINUTE = int(os.getenv("MAX_REQUESTS_PER_MINUTE", "10"))
 RATE_LIMIT_WINDOW = 60  # seconds
 
-# Concurrent shutdown protection
+# Concurrent shutdown protection - use Lock for atomic check-and-set
 _shutdown_lock = Lock()
 _shutdown_in_progress = False
 
+# Kubernetes API client (initialized lazily)
+k8s_core = None
+
+# Node name and auth token from environment
+NODE_NAME = os.getenv("NODE_NAME")
+AUTH_TOKEN = os.getenv("AUTH_TOKEN")
+
 # Configure logging
+_log_handlers = [logging.StreamHandler()]
+if AUDIT_ENABLED:
+    try:
+        _log_handlers.append(logging.FileHandler(AUDIT_LOG_PATH))
+    except (OSError, IOError):
+        print(f"WARNING: Cannot create audit log file at {AUDIT_LOG_PATH}, using stream handler only")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(AUDIT_LOG_PATH) if AUDIT_ENABLED else logging.StreamHandler(),
-    ],
+    handlers=_log_handlers,
 )
 logger = logging.getLogger("node-shutdown")
 
@@ -59,6 +79,7 @@ signal.signal(signal.SIGINT, handle_signal)
 
 # Rate limiter
 class RateLimiter:
+    """Thread-safe rate limiter using sliding window algorithm."""
     def __init__(self, max_requests: int, window: int):
         self.max_requests = max_requests
         self.window = window
@@ -66,8 +87,10 @@ class RateLimiter:
         self.lock = Lock()
 
     def is_allowed(self) -> bool:
+        """Check if request is allowed under rate limit."""
         with self.lock:
             now = time.time()
+            # Remove requests outside the current window
             self.requests = [r for r in self.requests if now - r < self.window]
             if len(self.requests) >= self.max_requests:
                 return False
@@ -76,42 +99,6 @@ class RateLimiter:
 
 
 rate_limiter = RateLimiter(MAX_REQUESTS_PER_MINUTE, RATE_LIMIT_WINDOW)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Manage application lifecycle."""
-    logger.info("Node Shutdown API starting up...")
-    global _app_shutdown_event
-    _app_shutdown_event = asyncio.Event()
-    yield
-    logger.info("Node Shutdown API shutting down...")
-    # Clean up resources here
-    try:
-        k8s_core.close()
-    except Exception:
-        pass
-
-
-app = FastAPI(
-    title="Node Shutdown API",
-    description="Secure node shutdown service for Harvester clusters",
-    version="1.0.0",
-    lifespan=lifespan,
-)
-
-# Import asyncio for lifespan
-import asyncio
-
-# Load Kubernetes in-cluster configuration
-try:
-    config.load_incluster_config()
-except config.ConfigException:
-    config.load_kube_config()
-
-k8s_core = client.CoreV1Api()
-NODE_NAME = os.getenv("NODE_NAME")
-AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 
 security = HTTPBearer()
 
@@ -131,6 +118,42 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
             detail="Invalid or missing authentication token",
         )
     return credentials.credentials
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifecycle."""
+    global k8s_core
+    logger.info("Node Shutdown API starting up...")
+
+    # Initialize Kubernetes connection
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        try:
+            config.load_kube_config()
+        except Exception as kube_err:
+            logger.warning(f"Kubernetes config not available: {kube_err}")
+
+    k8s_core = client.CoreV1Api()
+
+    global _app_shutdown_event
+    _app_shutdown_event = asyncio.Event()
+    yield
+    logger.info("Node Shutdown API shutting down...")
+    # Clean up resources here
+    try:
+        k8s_core.close()
+    except Exception:
+        pass
+
+
+app = FastAPI(
+    title="Node Shutdown API",
+    description="Secure node shutdown service for Harvester clusters",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 
 @app.exception_handler(HTTPException)
@@ -185,20 +208,39 @@ async def readiness_check():
     return {"status": "ready", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+@app.get("/healthz/k8s")
+async def k8s_readiness_check():
+    """Kubernetes connectivity health check endpoint."""
+    global k8s_core
+    if k8s_core is None:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "unavailable", "detail": "Kubernetes client not initialized"},
+        )
+    try:
+        # Simple API call to verify connectivity
+        k8s_core.list_node()
+        return {"status": "ready", "k8s": "connected", "timestamp": datetime.now(timezone.utc).isoformat()}
+    except Exception as e:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "unavailable", "detail": f"Kubernetes connection failed: {str(e)}"},
+        )
+
+
 @app.post("/system/shutdown", dependencies=[Depends(verify_token)])
 async def execute_shutdown(request: Request):
     """Execute graceful shutdown with safety checks."""
     global _shutdown_in_progress
 
-    # Prevent concurrent shutdowns
-    if _shutdown_in_progress:
-        logger.warning("Shutdown already in progress, ignoring request")
-        return JSONResponse(
-            status_code=status.HTTP_409_CONFLICT,
-            content={"detail": "Shutdown already in progress"},
-        )
-
+    # Atomic check-and-set using lock to prevent race conditions
     with _shutdown_lock:
+        if _shutdown_in_progress:
+            logger.warning("Shutdown already in progress, ignoring request")
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={"detail": "Shutdown already in progress"},
+            )
         _shutdown_in_progress = True
 
     try:

@@ -10,10 +10,46 @@ This service runs as a DaemonSet on each node in a Harvester cluster. It exposes
 
 ## Features
 
-- **Security Hardening**: Rate limiting, audit logging, concurrent shutdown protection
+- **Security Hardening**: Rate limiting, audit logging, concurrent shutdown protection, constant-time token comparison
 - **Harvester Integration**: Deployed as a Harvester Add-on via `harvesterhci.io/v1beta1` CRD
 - **Helm Chart**: Centralized configuration via `Charts/values.yaml`
-- **Kubevirt Aware**: Gracefully terminates VM workloads before host shutdown
+- **Kubevirt Aware**: Gracefully terminates VM workloads before host shutdown with timeout-based fallback
+- **Health Checks**: Liveness, readiness, and Kubernetes connectivity probes
+
+## Security Features
+
+### Authentication
+
+- **Bearer Token Authentication**: All shutdown requests require a strong Bearer token via `AUTH_TOKEN` environment variable
+- **Constant-time Comparison**: Uses `secrets.compare_digest()` to prevent timing attacks
+- **Empty Token Protection**: Returns 500 if `AUTH_TOKEN` is not configured
+
+### Rate Limiting
+
+- **Sliding Window Algorithm**: Configurable requests per minute (default: 10)
+- **Returns HTTP 429**: When rate limit is exceeded
+
+### Concurrent Shutdown Protection
+
+- **Atomic Lock Mechanism**: Uses `threading.Lock` for race-condition-free check-and-set
+- **Returns HTTP 409**: When shutdown is already in progress
+
+### Audit Logging
+
+- **All Requests Logged**: Method, path, status code, duration, client IP
+- **Configurable Path**: Default `/var/log/shutdown-audit.log`
+- **File and Stream Handlers**: Dual output for flexible log collection
+
+### Network Security
+
+- **NetworkPolicy Support**: Optional Kubernetes NetworkPolicy to restrict ingress traffic
+- **NodePort Access**: Exposed via NodePort with authentication protecting the API
+
+### Container Security
+
+- **Non-root User**: Dockerfile includes `appuser` for non-root execution
+- **Minimal Base Image**: Uses `python:3.11-slim` to reduce attack surface
+- **Dropped Capabilities**: All Linux capabilities dropped by default
 
 ## Quick Start
 
@@ -24,14 +60,28 @@ git clone https://github.com/zed378/hvt-shutdown-addons.git
 cd hvt-shutdown-addons
 ```
 
-### 2. Build & Push Docker Image
+### 2. Generate Secure Auth Token
 
 ```bash
-docker build -t your-registry/node-shutdown-api:latest .
-docker push your-registry/node-shutdown-api:latest
+# Generate a strong random token
+openssl rand -hex 32
 ```
 
-### 3. Package and Publish Helm Chart
+### 3. Update Configuration
+
+Edit `Charts/values.yaml` and update:
+
+- `auth.token`: Your generated secure token
+- `image.registry` and `image.repository`: Your container registry
+
+### 4. Build & Push Docker Image
+
+```bash
+docker build -t your-registry/hvt-shutdown:latest .
+docker push your-registry/hvt-shutdown:latest
+```
+
+### 5. Package and Publish Helm Chart
 
 ```bash
 # Make script executable
@@ -43,7 +93,7 @@ chmod +x publish_chart.sh
 # Edit charts-output/index.yaml and replace the placeholder URL with your actual serving URL
 ```
 
-### 4. Update Addon Configuration
+### 6. Update Addon Configuration
 
 Edit `Charts/addon.yaml` and update the repo URL:
 
@@ -52,7 +102,7 @@ spec:
   repo: "https://your-registry.example.com/charts" # Your chart repository URL
 ```
 
-### 5. Install as Harvester Add-on
+### 7. Install as Harvester Add-on
 
 ```bash
 # Apply the Addon CRD
@@ -70,7 +120,7 @@ graph TB
         subgraph Namespace["harvester-system Namespace"]
             subgraph DaemonSet["DaemonSet: node-shutdown-webhook"]
                 subgraph Container["FastAPI Container :8080"]
-                    API["API Endpoints<br/>POST /system/shutdown<br/>GET /healthz<br/>GET /healthz/ready"]
+                    API["API Endpoints<br/>POST /system/shutdown<br/>GET /healthz<br/>GET /healthz/ready<br/>GET /healthz/k8s"]
                     Client["K8s API Client<br/>- List pods<br/>- Delete virt-launchers"]
                 end
             end
@@ -100,16 +150,17 @@ Initiates a graceful shutdown sequence on the node where the service is running.
 
 ```bash
 curl -X POST http://localhost:8080/system/shutdown \
-  -H "Authorization: Bearer your-secret-token-string"
+  -H "Authorization: Bearer your-secret-token"
 ```
 
 **Shutdown Behavior:**
 
 1. Rate limit check (configurable requests per minute)
-2. Concurrent shutdown protection
+2. Concurrent shutdown protection (returns 409 if already in progress)
 3. List all running pods on the current node
 4. Delete `virt-launcher-*` pods with grace period (default: 10s)
-5. Attempt host shutdown via fallback chain:
+5. Wait for VMs to terminate (max: `VM_SHUTDOWN_TIMEOUT` seconds, default: 120s)
+6. Attempt host shutdown via fallback chain:
    - `chroot /host systemctl poweroff`
    - `systemctl poweroff`
    - `/sbin/shutdown -h now`
@@ -122,6 +173,15 @@ curl -X POST http://localhost:8080/system/shutdown \
   "timestamp": "2026-06-30T04:21:00+00:00"
 }
 ```
+
+**Error Responses:**
+
+| Status Code | Meaning                                         |
+| ----------- | ----------------------------------------------- |
+| 401         | Invalid or missing authentication token         |
+| 409         | Shutdown already in progress                    |
+| 429         | Rate limit exceeded                             |
+| 500         | Server error (missing config, shutdown failure) |
 
 ### GET /healthz
 
@@ -139,33 +199,48 @@ Readiness probe endpoint.
 { "status": "ready", "timestamp": "2026-06-30T04:21:00+00:00" }
 ```
 
-## Security Features
+### GET /healthz/k8s
 
-- **Rate Limiting**: Configurable requests per minute (default: 10)
-- **Audit Logging**: All requests logged with timestamp and metadata
-- **Concurrent Shutdown Protection**: Prevents race conditions
-- **Constant-time Token Comparison**: Prevents timing attacks
-- **Pod Security**: hostIPC/hostPID disabled, privilege escalation blocked
+Kubernetes connectivity health check endpoint. Returns 503 if the Kubernetes client is not initialized or cannot connect.
+
+```json
+{
+  "status": "ready",
+  "k8s": "connected",
+  "timestamp": "2026-06-30T04:21:00+00:00"
+}
+```
 
 ## Configuration
 
-All values are in `Charts/values.yaml` and `Charts/addon.yaml`:
+All values are in `Charts/values.yaml`:
 
-| Variable                            | Description                         | Default           |
-| ----------------------------------- | ----------------------------------- | ----------------- |
-| `auth.token`                        | Bearer token for API authentication | (change me)       |
-| `image.registry`                    | Docker image registry               | your-registry     |
-| `image.repository`                  | Docker image name                   | node-shutdown-api |
-| `image.tag`                         | Docker image tag                    | latest            |
-| `gracePeriodSeconds`                | Pod termination grace period        | 10                |
-| `rateLimiting.maxRequestsPerMinute` | Rate limit threshold                | 10                |
-| `auditLogging.enabled`              | Enable audit logging                | true              |
+| Variable                            | Description                           | Default        |
+| ----------------------------------- | ------------------------------------- | -------------- |
+| `auth.token`                        | Bearer token for API authentication   | **(required)** |
+| `image.registry`                    | Docker image registry                 | zed378         |
+| `image.repository`                  | Docker image name                     | hvt-shutdown   |
+| `image.tag`                         | Docker image tag                      | latest         |
+| `gracePeriodSeconds`                | Pod termination grace period          | 10             |
+| `vmShutdownTimeout`                 | Max wait time for VMs before poweroff | 120            |
+| `rateLimiting.maxRequestsPerMinute` | Rate limit threshold                  | 10             |
+| `auditLogging.enabled`              | Enable audit logging                  | true           |
+| `networkPolicy.enabled`             | Enable Kubernetes NetworkPolicy       | false          |
+
+## Security Best Practices
+
+1. **Generate Strong Tokens**: Always use `openssl rand -hex 32` or similar for auth tokens
+2. **Enable NetworkPolicy**: Set `networkPolicy.enabled: true` to restrict access
+3. **Restrict NodePort**: Use firewall rules to limit access to NodePort range
+4. **Monitor Audit Logs**: Regularly review `/var/log/shutdown-audit.log`
+5. **Rotate Tokens**: Periodically change `AUTH_TOKEN` and update the Kubernetes secret
+6. **Use TLS**: Deploy with an ingress controller that provides TLS termination
 
 ## Testing
 
 ```bash
 pip install -r requirements.txt
-pytest tests/
+pytest tests/ -v
 ```
 
 ## Troubleshooting
@@ -182,4 +257,7 @@ kubectl logs -n harvester-system -l app=node-shutdown
 
 # Check addon events
 kubectl describe addon node-shutdown -n harvester-local-storage
+
+# Test health endpoints
+kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/healthz
 ```

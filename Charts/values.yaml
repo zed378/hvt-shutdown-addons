@@ -1,8 +1,10 @@
 auth:
-  # IMPORTANT: For raw kubectl apply, encode manually: echo -n "your-secret-token" | base64
+  # IMPORTANT: Generate a strong, random token before deployment:
+  #   openssl rand -hex 32
   # For Helm, the token is automatically base64 encoded via {{ .Values.auth.token | b64enc }}
-  # Use a strong, random token: openssl rand -hex 32
-  token: "this-is-a-secret-token-string"
+  # WARNING: This token MUST be set before deployment. An empty token will cause 500 errors.
+  # TODO: Replace with your own secure random token before deploying
+  token: "CHANGE_ME_GENERATE_RANDOM_TOKEN"
 
 image:
   registry: "zed378"
@@ -111,3 +113,10 @@ nodePort:
 
 # Max time to wait for VMs to fully shut down before baremetal poweroff (seconds)
 vmShutdownTimeout: 120
+
+# Network policy (optional - restricts incoming traffic)
+networkPolicy:
+  enabled: false
+  # When enabled, only allows ingress on the health check port
+  # For production, consider adding source CIDR restrictions
+  ingressFromCidr: null # e.g., "10.0.0.0/8"

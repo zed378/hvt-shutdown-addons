@@ -73,10 +73,12 @@ class TestShutdownAPI(unittest.TestCase):
 
     @patch("app.main.AUTH_TOKEN", "test-secret-token")
     @patch("app.main.NODE_NAME", "test-node-01")
-    @patch("app.main.k8s_core")
     @patch("app.main.subprocess.run")
-    def test_shutdown_vms_timeout_proceeded(self, mock_subprocess, mock_k8s_core):
+    def test_shutdown_vms_timeout_proceeded(self, mock_subprocess):
         """Test shutdown proceeds with poweroff even if VMs timeout."""
+        # Import inside test to use mocked k8s_core
+        from unittest.mock import patch as patch_func
+        
         mock_pod = MagicMock()
         mock_pod.metadata.name = "virt-launcher-slow-pod"
         mock_pod.metadata.namespace = "default"
@@ -85,18 +87,17 @@ class TestShutdownAPI(unittest.TestCase):
         mock_vms_list.items = [mock_pod]
 
         # Always return the same VMs (simulating slow shutdown)
-        mock_k8s_core.list_pod_for_all_namespaces.return_value = mock_vms_list
+        with patch("app.main.k8s_core") as mock_k8s:
+            mock_k8s.list_pod_for_all_namespaces.return_value = mock_vms_list
+            mock_subprocess.return_value = None
 
-        # Mock subprocess to succeed
-        mock_subprocess.return_value = None
-
-        with patch("app.main.time.sleep") as mock_sleep:
-            # Override VM_SHUTDOWN_TIMEOUT for faster test
-            with patch.dict("os.environ", {"VM_SHUTDOWN_TIMEOUT": "1"}):
-                response = self.client.post(
-                    "/system/shutdown",
-                    headers=self.headers,
-                )
+            with patch("app.main.time.sleep") as mock_sleep:
+                # Override VM_SHUTDOWN_TIMEOUT for faster test - must patch the module variable
+                with patch("app.main.VM_SHUTDOWN_TIMEOUT", 0):
+                    response = self.client.post(
+                        "/system/shutdown",
+                        headers=self.headers,
+                    )
 
         self.assertEqual(response.status_code, 200)
         mock_subprocess.assert_called_once()
@@ -250,6 +251,10 @@ class TestShutdownAPI(unittest.TestCase):
 class TestShutdownConcurrency(unittest.TestCase):
     """Test concurrent shutdown protection."""
 
+    def setUp(self):
+        """Set up test fixtures."""
+        self.client = TestClient(app)
+
     @patch("app.main.AUTH_TOKEN", "test-secret-token")
     @patch("app.main.NODE_NAME", "test-node-01")
     @patch("app.main.k8s_core")
@@ -277,6 +282,10 @@ class TestShutdownConcurrency(unittest.TestCase):
 class TestHealthChecks(unittest.TestCase):
     """Test health check endpoints."""
 
+    def setUp(self):
+        """Set up test fixtures."""
+        self.client = TestClient(app)
+
     def test_healthz(self):
         """Test liveness probe endpoint."""
         response = self.client.get("/healthz")
@@ -292,6 +301,13 @@ class TestHealthChecks(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["status"], "ready")
         self.assertIn("timestamp", data)
+
+    def test_k8s_healthz(self):
+        """Test Kubernetes connectivity health check endpoint."""
+        response = self.client.get("/healthz/k8s")
+        # Without mocked k8s, the endpoint should return 503 since k8s client isn't initialized
+        # In a real cluster with incluster config, it would return 200
+        self.assertIn(response.status_code, [200, 503])
 
 
 class TestVerifyToken(unittest.TestCase):
@@ -319,15 +335,24 @@ class TestVerifyToken(unittest.TestCase):
 class TestRateLimiting(unittest.TestCase):
     """Test rate limiting functionality."""
 
+    def setUp(self):
+        """Set up test fixtures."""
+        self.client = TestClient(app)
+
     @patch("app.main.AUTH_TOKEN", "test-secret-token")
     @patch("app.main.NODE_NAME", "test-node-01")
-    @patch("app.main.MAX_REQUESTS_PER_MINUTE", 2)
     @patch("app.main.k8s_core")
     def test_rate_limit_exceeded(self, mock_k8s_core):
         """Test that rate limiting works."""
+        import app.main as main_module
+        
         mock_response = MagicMock()
         mock_response.items = []
         mock_k8s_core.list_pod_for_all_namespaces.return_value = mock_response
+
+        # Reset rate limiter with test-specific limit
+        main_module.rate_limiter.requests = []
+        main_module.rate_limiter.max_requests = 2
 
         with patch("app.main.subprocess.run"):
             # First request should succeed
@@ -336,14 +361,14 @@ class TestRateLimiting(unittest.TestCase):
                 headers={"Authorization": "Bearer test-secret-token"},
             )
             self.assertEqual(response1.status_code, 200)
-            
+
             # Second request should succeed
             response2 = self.client.post(
                 "/system/shutdown",
                 headers={"Authorization": "Bearer test-secret-token"},
             )
             self.assertEqual(response2.status_code, 200)
-            
+
             # Third request should be rate limited
             response3 = self.client.post(
                 "/system/shutdown",

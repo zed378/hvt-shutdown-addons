@@ -131,6 +131,28 @@ spec:
 {{ toYaml . | nindent 8 }}
 {{- end }}
 ---
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.daemonset.name }}-network-policy
+  namespace: {{ .Values.daemonset.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- range $key, $value := .Values.daemonset.labels }}
+      {{ $key }}: {{ $value | quote }}
+      {{- end }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from any source for NodePort access (auth handles API security)
+    # For production, restrict to specific CIDR or namespaces
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.healthCheck.liveness.port }}
+{{- end }}
+---
 {{- if .Values.nodePort.enabled }}
 apiVersion: v1
 kind: Service
