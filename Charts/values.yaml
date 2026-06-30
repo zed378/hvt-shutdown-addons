@@ -4,7 +4,7 @@ auth:
   # For Helm, the token is automatically base64 encoded via {{ .Values.auth.token | b64enc }}
   # WARNING: This token MUST be set before deployment. An empty token will cause 500 errors.
   # TODO: Replace with your own secure random token before deploying
-  token: "CHANGE_ME_GENERATE_RANDOM_TOKEN"
+  token: "cFFMZURta3hoTXB5YVlVVTN2MTQzYlZ1WkM5QmdHY3pSS1dqTThIaVJ0OXJVMUVaM1N6alowNjNaZGl3WUZhcA=="
 
 image:
   registry: "zed378"
