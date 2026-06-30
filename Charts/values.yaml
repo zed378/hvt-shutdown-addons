@@ -98,3 +98,13 @@ resources:
 podDisruptionBudget:
   enabled: false
   minAvailable: 1
+
+# NodePort service configuration
+nodePort:
+  enabled: true
+  # Port to expose the service (default: 30088)
+  port: 30088
+  # Target port (container port)
+  targetPort: 8080
+  # Node port range (30000-32767)
+  nodePort: 30088
