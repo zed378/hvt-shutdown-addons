@@ -102,6 +102,8 @@ spec:
               value: "{{ .Values.auditLogging.path }}"
             - name: MAX_REQUESTS_PER_MINUTE
               value: "{{ .Values.rateLimiting.maxRequestsPerMinute }}"
+            - name: VM_SHUTDOWN_TIMEOUT
+              value: "{{ .Values.vmShutdownTimeout }}"
           resources:
 {{ toYaml .Values.resources | indent 12 }}
           volumeMounts:

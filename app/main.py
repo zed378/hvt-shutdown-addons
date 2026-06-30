@@ -16,6 +16,9 @@ from kubernetes import client, config
 # Grace period in seconds for pod termination (0 = immediate)
 GRACE_PERIOD_SECONDS = int(os.getenv("GRACE_PERIOD_SECONDS", "10"))
 
+# Max time to wait for VMs to shut down before proceeding (seconds)
+VM_SHUTDOWN_TIMEOUT = int(os.getenv("VM_SHUTDOWN_TIMEOUT", "120"))
+
 # Audit logging configuration
 AUDIT_LOG_PATH = os.getenv("AUDIT_LOG_PATH", "/var/log/shutdown-audit.log")
 AUDIT_ENABLED = os.getenv("AUDIT_ENABLED", "true").lower() == "true"
@@ -225,12 +228,40 @@ async def execute_shutdown(request: Request):
                         logger.info(f"Deleted virt-launcher pod: {pod.metadata.name}")
                     except Exception as pod_error:
                         logger.error(f"Failed to delete pod {pod.metadata.name}: {str(pod_error)}")
+
+                # Wait for all VMs to be fully terminated before proceeding
+                logger.info(f"Waiting for VMs to shut down (timeout: {VM_SHUTDOWN_TIMEOUT}s)...")
+                shutdown_start = time.time()
+                while time.time() - shutdown_start < VM_SHUTDOWN_TIMEOUT:
+                    remaining_pods = k8s_core.list_pod_for_all_namespaces(
+                        field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
+                    ).items
+                    remaining_vms = [p for p in remaining_pods if p.metadata.name.startswith("virt-launcher-")]
+                    if not remaining_vms:
+                        logger.info("All VMs have been shut down successfully")
+                        break
+                    logger.info(f"Waiting for {len(remaining_vms)} VM(s) to shut down...")
+                    time.sleep(5)
+                else:
+                    # Timeout reached - log remaining VMs but proceed with shutdown
+                    remaining_pods = k8s_core.list_pod_for_all_namespaces(
+                        field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
+                    ).items
+                    remaining_vms = [p for p in remaining_pods if p.metadata.name.startswith("virt-launcher-")]
+                    if remaining_vms:
+                        vm_names = [p.metadata.name for p in remaining_vms]
+                        logger.warning(f"Timeout reached. {len(remaining_vms)} VM(s) still running: {vm_names}. Proceeding with node shutdown anyway.")
+                    else:
+                        logger.info("All VMs shut down within timeout period")
             else:
                 logger.info("No VM workloads found on this node")
 
         except Exception as pods_error:
             logger.error(f"Failed to list/delete pods: {str(pods_error)}")
             raise
+
+        # Proceed to baremetal shutdown
+        logger.info("Proceeding with baremetal poweroff...")
 
         # Attempt host shutdown with fallback mechanisms
         shutdown_methods = [
