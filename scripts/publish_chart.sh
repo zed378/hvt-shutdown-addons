@@ -1,10 +1,10 @@
 #!/bin/bash
 # Script to package and publish the Helm chart to a static file repository
-# Usage: ./publish_chart.sh [output_directory]
+# Usage: ./scripts/publish_chart.sh [output_directory]
 
 set -e
 
-CHART_DIR="$(cd "$(dirname "$0")/Charts" && pwd)"
+CHART_DIR="$(cd "$(dirname "$0")/../Charts" && pwd)"
 OUTPUT_DIR="${1:-./charts-output}"
 
 echo "Packaging Helm chart..."

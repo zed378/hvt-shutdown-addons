@@ -83,15 +83,29 @@ docker push your-registry/hvt-shutdown:latest
 
 ### 5. Package and Publish Helm Chart
 
+Each platform has a dedicated script in the `scripts/` directory:
+
+**Linux/macOS (bash):**
+
 ```bash
-# Make script executable
-chmod +x publish_chart.sh
-
-# Package the chart (creates charts-output/ directory)
-./publish_chart.sh
-
-# Edit charts-output/index.yaml and replace the placeholder URL with your actual serving URL
+chmod +x scripts/publish_chart.sh
+./scripts/publish_chart.sh
 ```
+
+**macOS (zsh):**
+
+```bash
+chmod +x scripts/publish_chart.mac.sh
+./scripts/publish_chart.mac.sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+.\scripts\publish_chart.ps1
+```
+
+The script creates `charts-output/` directory with the packaged `.tgz` chart and `index.yaml`. Edit `charts-output/index.yaml` and replace the placeholder URL with your actual serving URL.
 
 ### 6. Update Addon Configuration
 
@@ -242,6 +256,70 @@ All values are in `Charts/values.yaml`:
 pip install -r requirements.txt
 pytest tests/ -v
 ```
+
+## Scripts
+
+All scripts are located in the `scripts/` directory:
+
+| Script                         | Platform             | Description                                |
+| ------------------------------ | -------------------- | ------------------------------------------ |
+| `scripts/publish_chart.sh`     | Linux/macOS (bash)   | Package Helm chart and generate index.yaml |
+| `scripts/publish_chart.mac.sh` | macOS (zsh)          | macOS-optimized chart publishing script    |
+| `scripts/publish_chart.ps1`    | Windows (PowerShell) | Windows chart publishing script            |
+| `scripts/create_release.sh`    | Linux/macOS (bash)   | Interactive GitHub release creator         |
+| `scripts/create_release.ps1`   | Windows (PowerShell) | Windows GitHub release creator             |
+
+### Creating a GitHub Release
+
+**Prerequisites:**
+
+- [Helm](https://helm.sh/docs/intro/install/) installed
+- [GitHub CLI](https://cli.github.com/) authenticated (`gh auth login`)
+
+**Linux/macOS:**
+
+```bash
+# Interactive mode (prompts for version)
+./scripts/create_release.sh
+
+# Or with specific version
+./scripts/create_release.sh 1.0.0 v1.0.0 "Initial release"
+
+# Create as draft or pre-release
+./scripts/create_release.sh 1.0.0 --draft
+./scripts/create_release.sh 1.0.0 --prerelease
+```
+
+**Windows:**
+
+```powershell
+# Interactive mode
+.\scripts\create_release.ps1
+
+# Or with specific version
+.\scripts\create_release.ps1 -Version "1.0.0" -Message "Initial release"
+```
+
+The script will:
+
+1. Package the Helm chart into `charts-output/*.tgz`
+2. Generate `index.yaml` for the Helm repository
+3. Create a compressed archive of the repository state:
+   - **Linux/macOS**: `hvt-shutdown-addons-{version}.tar.gz`
+   - **Windows**: `hvt-shutdown-addons-{version}.zip`
+4. Place all artifacts in `releases/` directory
+5. Provide the `gh release create` command to upload artifacts to GitHub
+
+### Release Artifacts
+
+Each release includes the following files in the `releases/` directory:
+
+| File                                   | Description                             |
+| -------------------------------------- | --------------------------------------- |
+| `hvt-shutdown-addons-{version}.tar.gz` | Compressed source archive (Linux/macOS) |
+| `hvt-shutdown-addons-{version}.zip`    | Compressed source archive (Windows)     |
+| `hvt-shutdown-addons-{version}.tgz`    | Packaged Helm chart                     |
+| `index.yaml`                           | Helm repository index                   |
 
 ## Troubleshooting
 
