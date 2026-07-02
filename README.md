@@ -249,17 +249,18 @@ Kubernetes connectivity health check endpoint. Returns 503 if the Kubernetes cli
 
 All values are in `Charts/values.yaml`:
 
-| Variable                            | Description                           | Default        |
-| ----------------------------------- | ------------------------------------- | -------------- |
-| `auth.token`                        | Bearer token for API authentication   | **(required)** |
-| `image.registry`                    | Docker image registry                 | zed378         |
-| `image.repository`                  | Docker image name                     | hvt-shutdown   |
-| `image.tag`                         | Docker image tag                      | latest         |
-| `gracePeriodSeconds`                | Pod termination grace period          | 10             |
-| `vmShutdownTimeout`                 | Max wait time for VMs before poweroff | 120            |
-| `rateLimiting.maxRequestsPerMinute` | Rate limit threshold                  | 10             |
-| `auditLogging.enabled`              | Enable audit logging                  | true           |
-| `networkPolicy.enabled`             | Enable Kubernetes NetworkPolicy       | false          |
+| Variable                            | Description                               | Default        |
+| ----------------------------------- | ----------------------------------------- | -------------- |
+| `auth.token`                        | Bearer token for API authentication       | **(required)** |
+| `image.registry`                    | Docker image registry                     | zed378         |
+| `image.repository`                  | Docker image name                         | hvt-shutdown   |
+| `image.tag`                         | Docker image tag                          | latest         |
+| `gracePeriodSeconds`                | Pod termination grace period              | 10             |
+| `vmShutdownTimeout`                 | Max wait time for VMs before poweroff     | 120            |
+| `rateLimiting.maxRequestsPerMinute` | Rate limit threshold                      | 10             |
+| `auditLogging.enabled`              | Enable audit logging                      | true           |
+| `networkPolicy.enabled`             | Enable Kubernetes NetworkPolicy           | false          |
+| `uiPlugin.createUIPluginResource`   | Auto-create UIPlugin after endpoint ready | true           |
 
 ## Security Best Practices
 
@@ -419,3 +420,21 @@ kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/health
 - **Harvester UI Extension Integration**: Automatically deploys a custom Vue.js frontend extension into the Harvester dashboard when the addon is enabled. This provides a rich, native graphical interface for configuring the Authentication Token instead of relying on raw YAML editing.
 - **Enhanced Architecture Visuals**: Replaced previous architecture diagram with a high-quality SVG vector graphic.
 - **Automated UI Builds**: The GitHub publishing scripts now seamlessly build and bundle the UI extension tarball alongside the Helm chart.
+- **UIPlugin Resource Support**: Added UIPlugin custom resource for proper Rancher UI Extensions integration.
+- **Static File Server on Port 8081**: Built-in FastAPI static file server serves UI extension assets on port 8081 for UIPlugin loading.
+- **Docker Build Optimization**: Improved Dockerfile to properly copy UI extension files (package.json, JS bundles) to the correct static serving directory.
+- **ClusterIP Service for UIPlugin**: Changed from headless service to automatic ClusterIP allocation for reliable UIPlugin endpoint routing.
+- **Init Job for UIPlugin Creation**: Added Helm hook job that waits for the static file server endpoint to be available before creating the UIPlugin CR, preventing the UI plugin from getting stuck in "enabling" state.
+- **Conditional UIPlugin Creation**: Added `uiPlugin.createUIPluginResource` flag to control whether the UIPlugin CR is created automatically.
+
+## UI Plugin Deployment Flow
+
+The UI plugin uses a deferred creation approach to ensure reliable deployment:
+
+1. **Helm Install** → Creates DaemonSet + ClusterIP Service
+2. **Helm Hook (post-install)** → Init Job starts and polls the endpoint
+3. **Pod Ready** → Static file server responds on port 8081
+4. **Init Job Verifies** → Confirms `package.json` is accessible
+5. **UIPlugin CR Created** → Rancher UI Extensions picks up the extension automatically
+
+This ensures the Rancher UI can always fetch the UI plugin metadata when the UIPlugin is created, eliminating the common "stuck in enabling state" issue.
