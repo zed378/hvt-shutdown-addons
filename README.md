@@ -156,31 +156,7 @@ curl -X POST http://VIP:30888/system/shutdown \
 
 ## Architecture
 
-```mermaid
-graph TB
-    subgraph HarvesterCluster["Harvester Cluster"]
-        subgraph Namespace["harvester-system Namespace"]
-            subgraph DaemonSet["DaemonSet: node-shutdown-webhook"]
-                subgraph Container["FastAPI Container :8080"]
-                    API["API Endpoints<br/>POST /system/shutdown<br/>GET /healthz<br/>GET /healthz/ready<br/>GET /healthz/k8s"]
-                    Client["K8s API Client<br/>- List pods<br/>- Delete virt-launchers"]
-                end
-            end
-            AddonCRD["Addon CRD<br/>harvesterhci.io/v1beta1<br/>enabled/disabled toggle"]
-        end
-        subgraph Nodes["Physical Nodes"]
-            NodeA["Node A<br/>virt-launcher-vm1<br/>virt-launcher-vm2"]
-            NodeB["Node B<br/>virt-launcher-vm3"]
-        end
-    end
-
-    API --> Client
-    AddonCRD -. Manages .-> DaemonSet
-    DaemonSet --> NodeA
-    DaemonSet --> NodeB
-    NodeA -. Shutdown → delete VMs → poweroff .-> NodeA
-    NodeB -. Shutdown → delete VMs → poweroff .-> NodeB
-```
+![Architecture Diagram](architecture.svg)
 
 ## API Endpoints
 
