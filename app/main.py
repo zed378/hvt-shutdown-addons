@@ -113,10 +113,14 @@ STATIC_DIR = Path(__file__).parent / "static" / "ui-plugin"
 _ui_static_task = None
 
 
-def _start_static_server():
-    """Start a background FastAPI static file server on port 8081."""
+def _start_ui_static_server():
+    """Start a background FastAPI static file server on port 8081 for UIPlugin."""
+    global _ui_static_task
+    if _ui_static_task is not None and _ui_static_task.is_alive():
+        logger.info("UI plugin static server already running on port 8081")
+        return
     if not STATIC_DIR.exists():
-        logger.warning("Static UI plugin directory not found, skipping static server")
+        logger.warning("Static UI plugin directory not found at %s, skipping static server", STATIC_DIR)
         return
     from fastapi import FastAPI as _FastAPI
     from fastapi.staticfiles import StaticFiles
@@ -126,9 +130,9 @@ def _start_static_server():
     static_app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=False), name="ui-plugin")
     cfg = _uvicorn.Config(static_app, host="0.0.0.0", port=8081, log_level="warning")
     server = _uvicorn.Server(cfg)
-    _loop = asyncio.new_event_loop()
-    _loop.run_until_complete(server.serve())
-    _loop.close()
+    _ui_static_task = threading.Thread(target=lambda: asyncio.run(server.serve()), daemon=True, name="ui-static-server")
+    _ui_static_task.start()
+    logger.info("UI plugin static server started on port 8081 serving %s", STATIC_DIR)
 
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -153,6 +157,9 @@ async def lifespan(app: FastAPI):
     """Manage application lifecycle."""
     global k8s_core
     logger.info("Node Shutdown API starting up...")
+
+    # Start UI plugin static file server on port 8081
+    _start_ui_static_server()
 
     # Initialize Kubernetes connection
     try:
@@ -179,7 +186,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Node Shutdown API",
     description="Secure node shutdown service for Harvester clusters",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 

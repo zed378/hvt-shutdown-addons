@@ -5,9 +5,11 @@
 # This script:
 # 1. Packages the Helm chart to root directory
 # 2. Generates index.yaml in root directory
-# 3. Checkout only generated files to 'pages' branch via git worktree
-# 4. Deletes generated files from root after publish
-# 5. GitHub Pages will serve the files automatically
+# 3. Deploys generated files to 'pages' branch via git worktree
+# 4. GitHub Pages will serve the Helm repository automatically
+#
+# Note: UI extension static files are now baked into the Docker image
+# and served internally on port 8081. No UI tarball is published to GitHub.
 #
 # Requirements:
 #   - GitHub CLI (gh) authenticated: gh auth login
@@ -34,9 +36,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR/.."
 CHART_DIR="$PROJECT_ROOT/Charts"
 
-# Generated files in root directory
-CHART_TGZ_FILE="$PROJECT_ROOT/node-shutdown-1.1.0.tgz"
-UI_PACKAGE_FILE="$PROJECT_ROOT/hvt-shutdown-ui/dist-pkg/hvt-shutdown-ui-1.1.0.tar.gz"
+# Extract version dynamically from Chart.yaml
+CHART_VERSION=$(grep '^version:' "$CHART_DIR/Chart.yaml" | awk '{print $2}' | tr -d '"')
+CHART_NAME=$(grep '^name:' "$CHART_DIR/Chart.yaml" | awk '{print $2}' | tr -d '"')
+
+# Derived paths using dynamic version
+CHART_TGZ_FILE="$PROJECT_ROOT/${CHART_NAME}-${CHART_VERSION}.tgz"
 INDEX_YAML_FILE="$PROJECT_ROOT/index.yaml"
 TEMP_DIR=$(mktemp -d)
 
@@ -45,6 +50,7 @@ echo ""
 echo "Repository: $GITHUB_REPO"
 echo "Branch: $BRANCH"
 echo "Helm Repo URL: $HELM_REPO_URL"
+echo "Chart: ${CHART_NAME} v${CHART_VERSION}"
 echo ""
 
 # Check prerequisites
@@ -78,24 +84,6 @@ echo ""
 echo "=== Packaging Helm chart to root ==="
 helm package "$CHART_DIR" --destination "$PROJECT_ROOT"
 
-# Build the UI extension package
-echo "=== Building UI extension package ==="
-cd "$PROJECT_ROOT/hvt-shutdown-ui"
-# Ensure dependencies are installed and run build-pkg
-if command -v yarn &> /dev/null; then
-    yarn build-pkg hvt-shutdown-ui true
-elif command -v yarn.cmd &> /dev/null; then
-    yarn.cmd build-pkg hvt-shutdown-ui true
-elif command -v npm &> /dev/null; then
-    npm run build-pkg -- hvt-shutdown-ui true
-elif command -v npm.cmd &> /dev/null; then
-    npm.cmd run build-pkg -- hvt-shutdown-ui true
-else
-    echo "Error: Neither yarn nor npm was found in the path."
-    exit 1
-fi
-cd "$PROJECT_ROOT"
-
 if [ ! -f "$CHART_TGZ_FILE" ]; then
     echo "Error: Failed to package Helm chart."
     rm -rf "$TEMP_DIR"
@@ -103,9 +91,7 @@ if [ ! -f "$CHART_TGZ_FILE" ]; then
 fi
 
 CHART_FILENAME=$(basename "$CHART_TGZ_FILE")
-UI_FILENAME=$(basename "$UI_PACKAGE_FILE")
 echo "Chart: $CHART_FILENAME"
-echo "UI Package: $UI_FILENAME"
 
 # Generate index.yaml in root directory
 echo "Generating index.yaml in root..."
@@ -133,17 +119,12 @@ cd "$PAGES_DIR"
 
 # Copy generated files
 cp "$CHART_TGZ_FILE" "$PAGES_DIR/"
-if [ -f "$UI_PACKAGE_FILE" ]; then
-    cp "$UI_PACKAGE_FILE" "$PAGES_DIR/"
-else
-    echo "Warning: UI package file not found at $UI_PACKAGE_FILE"
-fi
 cp "$INDEX_YAML_FILE" "$PAGES_DIR/"
 
-git add $CHART_FILENAME $UI_FILENAME index.yaml
+git add "$CHART_FILENAME" index.yaml
 git config user.email "${OWNER}@users.noreply.github.com"
 git config user.name "$OWNER"
-git commit -m "Add helm chart $CHART_FILENAME" --allow-empty || echo "No changes to commit"
+git commit -m "Publish ${CHART_NAME} v${CHART_VERSION}" --allow-empty || echo "No changes to commit"
 git push origin "$BRANCH"
 
 cd "$PROJECT_ROOT"
@@ -158,7 +139,7 @@ echo "Removed generated files from root."
 echo ""
 echo "=== Chart published successfully ==="
 echo ""
-echo "Chart location: https://${OWNER}.github.io/${REPO_NAME}/charts/${CHART_FILENAME}"
+echo "Chart location: https://${OWNER}.github.io/${REPO_NAME}/${CHART_FILENAME}"
 echo "Index file: https://${OWNER}.github.io/${REPO_NAME}/index.yaml"
 echo ""
 echo "To install:"
@@ -166,11 +147,6 @@ echo "  helm repo add hvt-shutdown ${HELM_REPO_URL}"
 echo "  helm repo update"
 echo "  helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system"
 echo ""
-echo "NOTE: If you get 404 errors, enable GitHub Pages:"
-echo "  1. Go to https://github.com/${OWNER}/${REPO_NAME}/settings/pages"
-echo "  2. Source: Deploy from a branch"
-echo "  3. Branch: pages (root /)"
-echo "  4. Save"
 
 # Cleanup
 cd "$PROJECT_ROOT"

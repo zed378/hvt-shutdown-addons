@@ -1,9 +1,12 @@
 # ---- Stage 1: Build UI extension ----
 FROM node:24-alpine AS ui-builder
 WORKDIR /build
+# Install bash (required by @rancher/shell build scripts)
+RUN apk add --no-cache bash
 COPY hvt-shutdown-ui/ .
-RUN yarn install --frozen-lockfile || npm install
-RUN yarn build-pkg hvt-shutdown-ui true || true
+RUN yarn install --frozen-lockfile 2>/dev/null || npm install
+# Build the UI package; version is read from package.json automatically
+RUN yarn build-pkg hvt-shutdown-ui true
 
 # ---- Stage 2: Python runtime with static files ----
 FROM python:3.11-slim
@@ -25,14 +28,14 @@ COPY app/ ./app
 # Copy static UI files from builder stage
 RUN mkdir -p /app/static/ui-plugin/plugin
 
-# Copy package.json into plugin/ subdirectory
-RUN cp /build/dist-pkg/hvt-shutdown-ui-*/package.json /app/static/ui-plugin/plugin/package.json 2>/dev/null || true
+# Copy package.json into plugin/ subdirectory (use wildcard for versioned dir)
+COPY --from=ui-builder /build/dist-pkg/hvt-shutdown-ui-*/package.json /app/static/ui-plugin/plugin/package.json
 
-# Copy JS bundles (*.umd.min.js excludes .map files)
-RUN cp /build/dist-pkg/hvt-shutdown-ui-*/hvt-shutdown-ui-*.umd.min.js /app/static/ui-plugin/ 2>/dev/null || true
+# Copy all built JS bundles (*.umd.min.js excludes .map files)
+COPY --from=ui-builder /build/dist-pkg/hvt-shutdown-ui-*/hvt-shutdown-ui-*.umd.min.js /app/static/ui-plugin/
 
-# Create files.txt manifest
-RUN echo -e "plugin/package.json\nhvt-shutdown-ui-1.1.0.umd.min.js\nhvt-shutdown-ui-1.1.0.umd.min.202.js\nhvt-shutdown-ui-1.1.0.umd.min.362.js" \
+# Generate files.txt manifest dynamically from built files
+RUN (echo "plugin/package.json" && find /app/static/ui-plugin -maxdepth 1 -name "*.umd.min.js" -printf "%f\n") \
     > /app/static/ui-plugin/files.txt
 
 RUN chown -R appuser:appuser /app
