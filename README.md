@@ -49,7 +49,7 @@ This service runs as a DaemonSet on each node in a Harvester cluster. It exposes
 
 API base URL (example):
 
-- `http://VIP:30888` (NodePort — replace `VIP` with any cluster node IP or load-balancer VIP)
+- `http://VIP:30088` (NodePort — replace `VIP` with any cluster node IP or load-balancer VIP)
 - Shutdown endpoint: `POST /system/shutdown`
 - Health endpoint: `GET /healthz`
 
@@ -137,27 +137,28 @@ kubectl patch addon node-shutdown -n harvester-system --type=json -p '[{"op": "r
 Once enabled, the Add-on's bundled Harvester UI extension is automatically injected into the Harvester Dashboard.
 
 To configure your Authentication Token:
+
 1. Navigate to **Advanced -> Addons** in your Harvester UI.
 2. Click **Edit Config** on the `node-shutdown` addon.
 3. You will see a custom graphical interface! Enter your secure token into the **Authentication Token** field and click Save.
 
 ### 8. Access the API via NodePort
 
-After the DaemonSet is running, you can access the API using the chart's NodePort (default **30888**):
+After the DaemonSet is running, you can access the API using the chart's NodePort (default **30088**):
 
-- **Base URL**: `http://VIP:30888` (replace `VIP` with any cluster node IP or load-balancer VIP)
-- Replace `VIP` with your Harvester cluster node IP address, e.g., `http://192.168.1.100:30888`
+- **Base URL**: `http://VIP:30088` (replace `VIP` with any cluster node IP or load-balancer VIP)
+- Replace `VIP` with your Harvester cluster node IP address, e.g., `http://192.168.1.100:30088`
 
 **Health check:**
 
 ```bash
-curl http://VIP:30888/healthz
+curl http://VIP:30088/healthz
 ```
 
 **Trigger shutdown:**
 
 ```bash
-curl -X POST http://VIP:30888/system/shutdown \
+curl -X POST http://VIP:30088/system/shutdown \
   -H "Authorization: Bearer your-secret-token"
 ```
 
@@ -178,11 +179,11 @@ Initiates a shutdown sequence.
 
 ```bash
 # NodePort access (recommended)
-curl -X POST http://VIP:30888/system/shutdown \
+curl -X POST http://VIP:30088/system/shutdown \
   -H "Authorization: Bearer your-secret-token"
 
 # (Optional) local-only shutdown used for peer coordination
-curl -X POST "http://VIP:30888/system/shutdown?all_nodes=false" \
+curl -X POST "http://VIP:30088/system/shutdown?all_nodes=false" \
   -H "Authorization: Bearer your-secret-token"
 ```
 
@@ -414,7 +415,7 @@ kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/health
 ## Changelog
 
 ### v1.1.0
+
 - **Harvester UI Extension Integration**: Automatically deploys a custom Vue.js frontend extension into the Harvester dashboard when the addon is enabled. This provides a rich, native graphical interface for configuring the Authentication Token instead of relying on raw YAML editing.
 - **Enhanced Architecture Visuals**: Replaced previous architecture diagram with a high-quality SVG vector graphic.
 - **Automated UI Builds**: The GitHub publishing scripts now seamlessly build and bundle the UI extension tarball alongside the Helm chart.
-
