@@ -223,12 +223,13 @@ curl -X POST "http://VIP:30888/system/shutdown?all_nodes=false" \
 
 **Error Responses:**
 
-| Status Code | Meaning                                         |
+| Status Code | Meaning |
+
 | ----------- | ----------------------------------------------- |
-| 401         | Invalid or missing authentication token         |
-| 409         | Shutdown already in progress                    |
-| 429         | Rate limit exceeded                             |
-| 500         | Server error (missing config, shutdown failure) |
+| 401 | Invalid or missing authentication token |
+| 409 | Shutdown already in progress |
+| 429 | Rate limit exceeded |
+| 500 | Server error (missing config, shutdown failure) |
 
 ### GET /healthz
 
