@@ -1,21 +1,20 @@
-import os
-import signal
-import secrets
-import subprocess
-import logging
-import time
 import asyncio
-from datetime import datetime, timezone
-from contextlib import asynccontextmanager
-from pathlib import Path
+import logging
+import os
+import secrets
+import signal
+import subprocess
 import threading
-from threading import Lock
-import urllib.request
+import time
 import urllib.error
+import urllib.request
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from threading import Lock
 
-from fastapi import FastAPI, Depends, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Depends, Request, status
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import JSONResponse
 from kubernetes import client, config
 
 # Grace period in seconds for pod termination (0 = immediate)
@@ -34,7 +33,6 @@ if _audit_log_dir and not os.path.exists(_audit_log_dir):
     try:
         os.makedirs(_audit_log_dir, exist_ok=True)
     except OSError:
-        # If we can't create the directory, fall back to current directory
         AUDIT_LOG_PATH = os.path.join(".", os.path.basename(AUDIT_LOG_PATH))
 
 # Rate limiting configuration
@@ -52,6 +50,7 @@ k8s_core = None
 NODE_NAME = os.getenv("NODE_NAME")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 NODE_PORT = int(os.getenv("NODE_PORT", "30088"))
+
 
 # Configure logging
 _log_handlers = [logging.StreamHandler()]
@@ -109,32 +108,6 @@ security = HTTPBearer()
 
 
 
-# Background static file server for Rancher UIPlugin endpoint on port 8081
-STATIC_DIR = Path("/app/static/ui-plugin")
-_ui_static_task = None
-
-
-def _start_ui_static_server():
-    """Start a background FastAPI static file server on port 8081 for UIPlugin."""
-    global _ui_static_task
-    if _ui_static_task is not None and _ui_static_task.is_alive():
-        logger.info("UI plugin static server already running on port 8081")
-        return
-    if not STATIC_DIR.exists():
-        logger.warning("Static UI plugin directory not found at %s, skipping static server", STATIC_DIR)
-        return
-    from fastapi import FastAPI as _FastAPI
-    from fastapi.staticfiles import StaticFiles
-    import uvicorn as _uvicorn
-
-    static_app = _FastAPI()
-    static_app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=False), name="ui-plugin")
-    cfg = _uvicorn.Config(static_app, host="0.0.0.0", port=8081, log_level="warning")
-    server = _uvicorn.Server(cfg)
-    _ui_static_task = threading.Thread(target=lambda: asyncio.run(server.serve()), daemon=True, name="ui-static-server")
-    _ui_static_task.start()
-    logger.info("UI plugin static server started on port 8081 serving %s", STATIC_DIR)
-
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Verify authentication token with constant-time comparison."""
@@ -158,9 +131,6 @@ async def lifespan(app: FastAPI):
     """Manage application lifecycle."""
     global k8s_core
     logger.info("Node Shutdown API starting up...")
-
-    # Start UI plugin static file server on port 8081
-    _start_ui_static_server()
 
     # Initialize Kubernetes connection
     try:
@@ -217,13 +187,13 @@ async def audit_middleware(request: Request, call_next):
     start_time = time.time()
     response = await call_next(request)
     duration = time.time() - start_time
-    
+
     # Determine actual client IP (checking proxy headers first)
     forwarded = request.headers.get("x-forwarded-for")
     real_ip = request.headers.get("x-real-ip")
     client_host = request.client.host if request.client else "unknown"
     client_ip = forwarded.split(",")[0].strip() if forwarded else (real_ip.strip() if real_ip else client_host)
-    
+
     logger.info(
         f"Audit: method={request.method} path={request.url.path} "
         f"status={response.status_code} duration={duration:.3f}s "
@@ -365,7 +335,7 @@ def run_shutdown_sequence(peer_ips: list[str] = None):
     """Run the full shutdown sequence in a background daemon thread."""
     try:
         _graceful_vm_shutdown()
-        
+
         if peer_ips:
             # Wait for peers to go offline before powering off this node
             logger.info(f"Local VMs shut down. Waiting for peer nodes {peer_ips} to go offline...")
@@ -385,7 +355,7 @@ def run_shutdown_sequence(peer_ips: list[str] = None):
                 logger.warning(f"Timeout reached. Proceeding to power off coordinator node anyway. Peers still online: {remaining_peers}")
             else:
                 logger.info("All peer nodes are offline. Proceeding to power off coordinator node.")
-                
+
         _host_poweroff()
     except Exception as e:
         logger.error(f"Background shutdown failed: {str(e)}")
@@ -439,7 +409,7 @@ async def coordinate_cluster_shutdown():
             node_name = pod.spec.node_name
             if not pod_ip or node_name == NODE_NAME:
                 continue
-            
+
             logger.info(f"Adding peer node {node_name} (IP: {pod_ip}) to shutdown queue")
             peer_ips.append(pod_ip)
             tasks.append(asyncio.to_thread(call_shutdown_on_node, pod_ip))
@@ -549,7 +519,7 @@ def _host_poweroff():
             with open(sysrq_path, "w") as f:
                 f.write("1\n")
             logger.info("SysRq successfully enabled on host")
-            
+
         trigger_path = "/host/proc/sysrq-trigger"
         if os.path.exists(trigger_path):
             with open(trigger_path, "w") as f:

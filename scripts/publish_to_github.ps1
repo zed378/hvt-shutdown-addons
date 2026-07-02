@@ -1,15 +1,21 @@
-# PowerShell script to publish Helm chart to GitHub as a Helm repository
+# PowerShell script to build and publish UI extension + Helm chart to GitHub Pages
 # Usage: .\scripts\publish_to_github.ps1
 #
-# This script:
-# 1. Packages the Helm chart to root directory
-# 2. Generates index.yaml in root directory
-# 3. Checkout only generated files to 'pages' branch via git worktree
-# 4. Deletes generated files from root after publish
-# 5. GitHub Pages will serve the files automatically
+# This script does everything in a single run and a single git push:
+# 1. Builds the Vue UI extension (yarn build-pkg)
+# 2. Packages the Helm chart and generates index.yaml
+# 3. Clones the 'pages' branch once and copies all artifacts
+# 4. Commits and pushes in one operation
+#
+# GitHub Pages serves both the Helm repository and UI plugin static files at:
+#   https://zed378.github.io/hvt-shutdown-addons
+#
+# For automated publishing on every push to main, see:
+#   .github/workflows/publish-pages.yml
 #
 # Requirements:
 #   - GitHub CLI (gh) authenticated: gh auth login
+#   - Node.js 24+ with yarn or npm installed
 #   - Helm installed
 #   - Git configured with remote origin
 #
@@ -20,146 +26,220 @@
 #   4. Save
 
 param(
-    [string]$Owner = "zed378",
+    [string]$Owner    = "zed378",
     [string]$RepoName = "hvt-shutdown-addons",
-    [string]$Branch = "pages"
+    [string]$Branch   = "pages"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# ── Configuration ──────────────────────────────────────────────────────
 $HelmRepoUrl = "https://${Owner}.github.io/${RepoName}"
-$GithubRepo = "https://github.com/${Owner}/${RepoName}.git"
+$GithubRepo  = "https://github.com/${Owner}/${RepoName}.git"
+$UiDir       = "hvt-shutdown-ui"
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
-$ChartDir = Join-Path $ProjectRoot "Charts"
+$ChartDir    = Join-Path $ProjectRoot "Charts"
+$UiSrcDir    = Join-Path $ProjectRoot $UiDir
 
-# Generated files in root directory
-$ChartTgzFile = Join-Path $ProjectRoot "node-shutdown-1.0.0.tgz"
+# Extract Helm chart metadata
+$ChartYamlPath = Join-Path $ChartDir "Chart.yaml"
+$ChartVersion  = (Select-String -Path $ChartYamlPath -Pattern '^version:\s*(.+)').Matches.Groups[1].Value.Trim()
+$ChartName     = (Select-String -Path $ChartYamlPath -Pattern '^name:\s*(.+)').Matches.Groups[1].Value.Trim()
+$ChartTgzFile  = Join-Path $ProjectRoot "${ChartName}-${ChartVersion}.tgz"
 $IndexYamlFile = Join-Path $ProjectRoot "index.yaml"
-$TempDir = New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "temp-github-pages-$$") | Select-Object -ExpandProperty FullName
+$TempDir       = Join-Path $env:TEMP ("hvt-shutdown-pages-" + [Guid]::NewGuid().ToString())
 
 Write-Host ""
-Write-Host "=== GitHub Helm Repository Publisher ===" -ForegroundColor Cyan
+Write-Host "=== GitHub Pages Publisher ===" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Repository: $GithubRepo" -ForegroundColor Yellow
-Write-Host "Branch: $Branch" -ForegroundColor Yellow
-Write-Host "Helm Repo URL: $HelmRepoUrl" -ForegroundColor Yellow
+Write-Host "Repository:  $GithubRepo"     -ForegroundColor Yellow
+Write-Host "Branch:      $Branch"          -ForegroundColor Yellow
+Write-Host "Helm Repo:   $HelmRepoUrl"     -ForegroundColor Yellow
+Write-Host "Chart:       ${ChartName} v${ChartVersion}" -ForegroundColor Yellow
+Write-Host "UI Source:   $UiSrcDir"        -ForegroundColor Yellow
 Write-Host ""
 
-# Check prerequisites
+# ── Prerequisites ──────────────────────────────────────────────────────
 foreach ($cmd in @("helm", "git")) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
-        Write-Host "Error: $cmd is not installed." -ForegroundColor Red
+        Write-Host "Error: '$cmd' is not installed." -ForegroundColor Red
         exit 1
     }
 }
 
-# Check git remote
+# Node.js
+try { $nodeVer = node --version; Write-Host "Node: $nodeVer" }
+catch { Write-Host "Error: Node.js is not installed." -ForegroundColor Red; exit 1 }
+
+# yarn / npm
+if (Get-Command yarn -ErrorAction SilentlyContinue) {
+    $pkgMgr = "yarn"
+    Write-Host "Yarn: $(yarn --version)"
+} elseif (Get-Command npm -ErrorAction SilentlyContinue) {
+    $pkgMgr = "npm"
+    Write-Host "npm:  $(npm --version)"
+} else {
+    Write-Host "Error: Neither yarn nor npm is installed." -ForegroundColor Red
+    exit 1
+}
+Write-Host ""
+
+# Git remote
 $remoteUrl = git remote get-url origin 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Error: No git remote 'origin' configured." -ForegroundColor Red
-    Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
     exit 1
 }
 Write-Host "Git remote: $remoteUrl" -ForegroundColor Green
 
-# Check if gh is available for nicer auth experience
-if (Get-Command "gh" -ErrorAction SilentlyContinue) {
-    $ghStatus = gh auth status 2>&1
+# GitHub CLI
+if (Get-Command gh -ErrorAction SilentlyContinue) {
+    gh auth status 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Warning: GitHub CLI (gh) authentication failed." -ForegroundColor Yellow
-        Write-Host "Ensure you're authenticated via 'gh auth login' or git credential manager." -ForegroundColor Yellow
+        Write-Host "Warning: gh CLI not authenticated. Run 'gh auth login'." -ForegroundColor Yellow
     } else {
         Write-Host "GitHub CLI: Authenticated" -ForegroundColor Green
     }
 } else {
-    Write-Host "Note: GitHub CLI (gh) not installed. Using git credential manager for authentication." -ForegroundColor Yellow
-    Write-Host "Install gh at: https://cli.github.com" -ForegroundColor Yellow
+    Write-Host "Note: gh CLI not found — using git credential manager." -ForegroundColor Yellow
 }
-
-Write-Host "Owner: $Owner" -ForegroundColor Yellow
-Write-Host "Repo: $RepoName" -ForegroundColor Yellow
 Write-Host ""
 
-# Package the Helm chart to root directory
-Write-Host "=== Packaging Helm chart to root ===" -ForegroundColor Cyan
+# ── Step 1: Build UI Extension ─────────────────────────────────────────
+Write-Host "=== [1/3] Building UI Extension ===" -ForegroundColor Cyan
+Set-Location $UiSrcDir
+
+if (-not (Test-Path "node_modules")) {
+    Write-Host "Installing UI dependencies..." -ForegroundColor Yellow
+    if ($pkgMgr -eq "yarn") { yarn install --frozen-lockfile } else { npm install }
+}
+
+yarn build-pkg $UiDir true
+
+$DistPkgDir = Join-Path $UiSrcDir "dist-pkg"
+if (-not (Test-Path $DistPkgDir)) {
+    Write-Host "Error: Build output not found at $DistPkgDir" -ForegroundColor Red
+    exit 1
+}
+
+$versionDir = Get-ChildItem -Directory $DistPkgDir |
+    Where-Object { $_.Name -match '^hvt-shutdown-ui-.+' } |
+    Select-Object -First 1
+
+if (-not $versionDir) {
+    Write-Host "Error: No versioned build directory found in $DistPkgDir" -ForegroundColor Red
+    Get-ChildItem $DistPkgDir
+    exit 1
+}
+
+$UiVersionDir = $versionDir.FullName
+$UiVersion    = $versionDir.Name -replace '^hvt-shutdown-ui-', ''
+Write-Host "Built UI version: $UiVersion  ->  $UiVersionDir" -ForegroundColor Green
+Write-Host ""
+
+Set-Location $ProjectRoot
+
+# ── Step 2: Package Helm Chart ─────────────────────────────────────────
+Write-Host "=== [2/3] Packaging Helm Chart ===" -ForegroundColor Cyan
+
+# Copy scripts into Charts/scripts/ for ConfigMap inclusion
+New-Item -ItemType Directory -Force -Path (Join-Path $ChartDir "scripts") | Out-Null
+Get-ChildItem "$ScriptDir\*.sh" | Where-Object { $_.Name -ne "publish_to_github.sh" } |
+    Copy-Item -Destination (Join-Path $ChartDir "scripts")
+Get-ChildItem "$ScriptDir\*.ps1"    -ErrorAction SilentlyContinue |
+    Copy-Item -Destination (Join-Path $ChartDir "scripts") -ErrorAction SilentlyContinue
+Get-ChildItem "$ScriptDir\*.mac.sh" -ErrorAction SilentlyContinue |
+    Copy-Item -Destination (Join-Path $ChartDir "scripts") -ErrorAction SilentlyContinue
+
 helm package $ChartDir --destination $ProjectRoot
 
 if (-not (Test-Path $ChartTgzFile)) {
     Write-Host "Error: Failed to package Helm chart." -ForegroundColor Red
-    Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
     exit 1
 }
+$ChartFilename = Split-Path $ChartTgzFile -Leaf
+Write-Host "Packaged: $ChartFilename" -ForegroundColor Green
 
-$ChartFilename = "node-shutdown-1.0.0.tgz"
-Write-Host "Chart: $ChartFilename" -ForegroundColor Green
-
-# Generate index.yaml in root directory
-Write-Host "Generating index.yaml in root..." -ForegroundColor Cyan
 helm repo index --url $HelmRepoUrl $ProjectRoot
-
+Write-Host "Generated: index.yaml" -ForegroundColor Green
 Write-Host ""
-Write-Host "=== index.yaml content ===" -ForegroundColor Cyan
+Write-Host "=== index.yaml ===" -ForegroundColor Cyan
 Get-Content $IndexYamlFile
 Write-Host ""
 
-# Checkout generated files to pages branch
-Write-Host "=== Checking out generated files to '$Branch' ===" -ForegroundColor Cyan
+# ── Step 3: Deploy to pages branch (single clone + single push) ────────
+Write-Host "=== [3/3] Deploying to '$Branch' branch ===" -ForegroundColor Cyan
 $PagesDir = Join-Path $TempDir "pages"
+New-Item -ItemType Directory -Force -Path $PagesDir | Out-Null
 
-# Clone pages branch directly
-if (git clone --branch $Branch --single-branch $GithubRepo $PagesDir 2>$null) {
-    Write-Host "Cloned $Branch branch." -ForegroundColor Green
-} else {
-    Write-Host "Error: Cannot clone $Branch branch." -ForegroundColor Red
-    Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+git clone --branch $Branch --single-branch $GithubRepo $PagesDir 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Error: Cannot clone '$Branch' branch." -ForegroundColor Red
+    Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
     exit 1
 }
+Write-Host "Cloned '$Branch' branch." -ForegroundColor Green
+
+# Copy UI static files
+$DestVersionDir = Join-Path $PagesDir "hvt-shutdown-ui-$UiVersion"
+if (Test-Path $DestVersionDir) { Remove-Item -Recurse -Force $DestVersionDir }
+New-Item -ItemType Directory -Force -Path $DestVersionDir | Out-Null
+Copy-Item -Recurse -Path "$UiVersionDir\*" -Destination $DestVersionDir
+Copy-Item (Join-Path $UiVersionDir "package.json") (Join-Path $PagesDir "package.json") -Force
+Write-Host "Copied UI files -> hvt-shutdown-ui-$UiVersion/" -ForegroundColor Green
+
+# Copy Helm artifacts
+Copy-Item $ChartTgzFile  (Join-Path $PagesDir $ChartFilename)
+Copy-Item $IndexYamlFile (Join-Path $PagesDir "index.yaml")
+Write-Host "Copied Helm artifacts -> $ChartFilename + index.yaml" -ForegroundColor Green
 
 Set-Location $PagesDir
 
-# Copy generated files
-Copy-Item $ChartTgzFile (Join-Path $PagesDir $ChartFilename)
-Copy-Item $IndexYamlFile (Join-Path $PagesDir "index.yaml")
-
-git add $ChartFilename index.yaml
+git add "hvt-shutdown-ui-$UiVersion" package.json $ChartFilename index.yaml
 git config user.email "${Owner}@users.noreply.github.com"
-git config user.name $Owner
-git commit -m "Add helm chart $ChartFilename" --allow-empty 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "No changes to commit." -ForegroundColor Yellow
-}
-
+git config user.name  $Owner
+git commit -m "Publish UI v${UiVersion} and ${ChartName} v${ChartVersion}" --allow-empty 2>$null
+if ($LASTEXITCODE -ne 0) { Write-Host "Nothing to commit." -ForegroundColor Yellow }
 git push origin $Branch
 
 Set-Location $ProjectRoot
 
-# Delete generated files from root
+# ── Cleanup ────────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "=== Cleaning up generated files ===" -ForegroundColor Yellow
-Remove-Item $ChartTgzFile -Force -ErrorAction SilentlyContinue
+Write-Host "=== Cleaning up ===" -ForegroundColor Yellow
+$cleanupScripts = @(
+    "publish_to_github.sh", "publish_to_github.ps1",
+    "publish_chart.sh",     "publish_chart.ps1", "publish_chart.mac.sh",
+    "create_release.sh",    "create_release.ps1"
+)
+foreach ($s in $cleanupScripts) {
+    Remove-Item (Join-Path $ChartDir "scripts\$s") -Force -ErrorAction SilentlyContinue
+}
+Remove-Item $ChartTgzFile  -Force -ErrorAction SilentlyContinue
 Remove-Item $IndexYamlFile -Force -ErrorAction SilentlyContinue
-Write-Host "Removed generated files from root." -ForegroundColor Green
+Remove-Item -Recurse -Force (Join-Path $ProjectRoot "charts-output") -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force (Join-Path $ProjectRoot "releases")      -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
+Write-Host "Done." -ForegroundColor Green
 
 Write-Host ""
-Write-Host "=== Chart published successfully ===" -ForegroundColor Green
+Write-Host "=== Published successfully ===" -ForegroundColor Green
 Write-Host ""
-Write-Host "Chart location: https://${Owner}.github.io/${RepoName}/charts/${ChartFilename}" -ForegroundColor Green
-Write-Host "Index file: https://${Owner}.github.io/${RepoName}/index.yaml" -ForegroundColor Green
+Write-Host "Helm index:   https://${Owner}.github.io/${RepoName}/index.yaml"   -ForegroundColor Green
+Write-Host "Helm chart:   https://${Owner}.github.io/${RepoName}/${ChartFilename}" -ForegroundColor Green
+Write-Host "UIPlugin URL: https://${Owner}.github.io/${RepoName}"              -ForegroundColor Green
+Write-Host "UI plugin:    https://${Owner}.github.io/${RepoName}/hvt-shutdown-ui-${UiVersion}/package/index.html" -ForegroundColor Green
 Write-Host ""
-Write-Host "To install:" -ForegroundColor Cyan
-Write-Host "  helm repo add hvt-shutdown ${HelmRepoUrl}" -ForegroundColor White
-Write-Host "  helm repo update" -ForegroundColor White
-Write-Host "  helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system" -ForegroundColor White
+Write-Host "To add the Helm repo:" -ForegroundColor Cyan
+Write-Host "  helm repo add hvt-shutdown ${HelmRepoUrl}"
+Write-Host "  helm repo update"
+Write-Host "  helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system"
 Write-Host ""
 Write-Host "NOTE: If you get 404 errors, enable GitHub Pages:" -ForegroundColor Yellow
-Write-Host "  1. Go to https://github.com/${Owner}/${RepoName}/settings/pages" -ForegroundColor White
-Write-Host "  2. Source: Deploy from a branch" -ForegroundColor White
-Write-Host "  3. Branch: pages (root /)" -ForegroundColor White
-Write-Host "  4. Save" -ForegroundColor White
-
-# Cleanup temp directory
-Set-Location $ProjectRoot
-Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "  1. Go to https://github.com/${Owner}/${RepoName}/settings/pages"
+Write-Host "  2. Source: Deploy from a branch"
+Write-Host "  3. Branch: pages (root /)"
+Write-Host "  4. Save"

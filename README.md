@@ -15,6 +15,7 @@ This service runs as a DaemonSet on each node in a Harvester cluster. It exposes
 - **Helm Chart**: Centralized configuration via `Charts/values.yaml`
 - **Kubevirt Aware**: Gracefully terminates VM workloads before host shutdown with timeout-based fallback
 - **Health Checks**: Liveness, readiness, and Kubernetes connectivity probes
+- **UI Plugin**: Vue.js frontend extension served from GitHub Pages
 
 ## Security Features
 
@@ -55,7 +56,6 @@ API base URL (example):
 
 ### Container Security
 
-- **Non-root User**: Dockerfile includes `appuser` for non-root execution
 - **Minimal Base Image**: Uses `python:3.11-slim` to reduce attack surface
 - **Dropped Capabilities**: All Linux capabilities dropped by default
 
@@ -89,42 +89,48 @@ docker build -t your-registry/hvt-shutdown:latest .
 docker push your-registry/hvt-shutdown:latest
 ```
 
-### 5. Package and Publish Helm Chart
+### 5. Publish UI Extension to GitHub Pages
+
+```bash
+# Build and publish UI static files to pages branch
+./scripts/publish_ui_to_pages.sh
+```
+
+Or on Windows:
+
+```powershell
+.\scripts\publish_ui_to_pages.ps1
+```
+
+This builds the Vue UI extension and pushes the static files to the `pages` branch, which GitHub Pages serves at `https://zed378.github.io/hvt-shutdown-addons`.
+
+### 6. Package and Publish Helm Chart
 
 Each platform has a dedicated script in the `scripts/` directory:
 
 **Linux/macOS (bash):**
 
 ```bash
-chmod +x scripts/publish_chart.sh
-./scripts/publish_chart.sh
-```
-
-**macOS (zsh):**
-
-```bash
-chmod +x scripts/publish_chart.mac.sh
-./scripts/publish_chart.mac.sh
+chmod +x scripts/publish_to_github.sh
+./scripts/publish_to_github.sh
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-.\scripts\publish_chart.ps1
+.\scripts\publish_to_github.ps1
 ```
 
-The script creates `charts-output/` directory with the packaged `.tgz` chart and `index.yaml`. Edit `charts-output/index.yaml` and replace the placeholder URL with your actual serving URL.
-
-### 6. Update Addon Configuration
+### 7. Update Addon Configuration
 
 Edit `Charts/addon.yaml` and update the repo URL:
 
 ```yaml
 spec:
-  repo: "https://your-registry.example.com/charts" # Your chart repository URL
+  repo: "https://zed378.github.io/hvt-shutdown-addons/" # Your chart repository URL
 ```
 
-### 7. Install as Harvester Add-on
+### 8. Install as Harvester Add-on
 
 ```bash
 # Apply the Addon CRD
@@ -142,7 +148,7 @@ To configure your Authentication Token:
 2. Click **Edit Config** on the `node-shutdown` addon.
 3. You will see a custom graphical interface! Enter your secure token into the **Authentication Token** field and click Save.
 
-### 8. Access the API via NodePort
+### 9. Access the API via NodePort
 
 After the DaemonSet is running, you can access the API using the chart's NodePort (default **30088**):
 
@@ -165,6 +171,33 @@ curl -X POST http://VIP:30088/system/shutdown \
 ## Architecture
 
 ![Architecture Diagram](architecture.svg)
+
+### UI Plugin Architecture
+
+```
+                    ┌─────────────────────┐
+                    │   GitHub Pages       │
+                    │   (pages branch)     │
+                    │                      │
+                    │  UI Static Files     │
+                    │  (JS, CSS, fonts)    │
+                    └──────────┬───────────┘
+                               │
+                               │ HTTPS
+                               │
+                    ┌──────────▼───────────┐
+                    │   Harvester UI        │
+                    │   (Rancher Shell)     │
+                    └──────────┬───────────┘
+                               │
+                    ┌──────────▼───────────┐
+                    │   UIPlugin CRD        │
+                    │   (cattle-ui-plugin-  │
+                    │    system)            │
+                    └──────────────────────┘
+```
+
+The UI extension is built separately and deployed to GitHub Pages via `publish_ui_to_pages.sh`. The Helm chart references this endpoint in the UIPlugin CRD, which Rancher UI Extensions uses to load the Vue.js frontend.
 
 ## API Endpoints
 
@@ -282,117 +315,31 @@ pytest tests/ -v
 
 All scripts are located in the `scripts/` directory:
 
-| Script                          | Platform             | Description                                |
-| ------------------------------- | -------------------- | ------------------------------------------ |
-| `scripts/publish_chart.sh`      | Linux/macOS (bash)   | Package Helm chart and generate index.yaml |
-| `scripts/publish_chart.mac.sh`  | macOS (zsh)          | macOS-optimized chart publishing script    |
-| `scripts/publish_chart.ps1`     | Windows (PowerShell) | Windows chart publishing script            |
-| `scripts/publish_to_github.sh`  | Linux/macOS (bash)   | Publish chart to GitHub Pages as Helm repo |
-| `scripts/publish_to_github.ps1` | Windows (PowerShell) | Publish chart to GitHub Pages as Helm repo |
-| `scripts/create_release.sh`     | Linux/macOS (bash)   | Interactive GitHub release creator         |
-| `scripts/create_release.ps1`    | Windows (PowerShell) | Windows GitHub release creator             |
+| Script                            | Platform             | Description                                |
+| --------------------------------- | -------------------- | ------------------------------------------ |
+| `scripts/publish_ui_to_pages.sh`  | Linux/macOS (bash)   | Build and publish UI to GitHub Pages       |
+| `scripts/publish_ui_to_pages.ps1` | Windows (PowerShell) | Build and publish UI to GitHub Pages       |
+| `scripts/publish_to_github.sh`    | Linux/macOS (bash)   | Publish Helm chart to GitHub Pages as repo |
+| `scripts/publish_to_github.ps1`   | Windows (PowerShell) | Publish Helm chart to GitHub Pages as repo |
+| `scripts/create_release.sh`       | Linux/macOS (bash)   | Interactive GitHub release creator         |
+| `scripts/create_release.ps1`      | Windows (PowerShell) | Windows GitHub release creator             |
 
-### Creating a GitHub Release
-
-**Prerequisites:**
-
-- [Helm](https://helm.sh/docs/intro/install/) installed
-- [GitHub CLI](https://cli.github.com/) authenticated (`gh auth login`)
-
-**Linux/macOS:**
+### Publishing UI Extension to GitHub Pages
 
 ```bash
-# Interactive mode (prompts for version)
-./scripts/create_release.sh
+# Linux/macOS
+./scripts/publish_ui_to_pages.sh
 
-# Or with specific version
-./scripts/create_release.sh 1.0.0 v1.0.0 "Initial release"
-
-# Create as draft or pre-release
-./scripts/create_release.sh 1.0.0 --draft
-./scripts/create_release.sh 1.0.0 --prerelease
+# Windows
+.\scripts\publish_ui_to_pages.ps1
 ```
 
-**Windows:**
+This script:
 
-```powershell
-# Interactive mode
-.\scripts\create_release.ps1
-
-# Or with specific version
-.\scripts\create_release.ps1 -Version "1.0.0" -Message "Initial release"
-```
-
-The script will:
-
-1. Package the Helm chart into `charts-output/*.tgz`
-2. Generate `index.yaml` for the Helm repository
-3. Create a compressed archive of the repository state:
-   - **Linux/macOS**: `hvt-shutdown-addons-{version}.tar.gz`
-   - **Windows**: `hvt-shutdown-addons-{version}.zip`
-4. Place all artifacts in `releases/` directory
-5. Provide the `gh release create` command to upload artifacts to GitHub
-
-### Release Artifacts
-
-Each release includes the following files in the `releases/` directory:
-
-| File                                   | Description                             |
-| -------------------------------------- | --------------------------------------- |
-| `hvt-shutdown-addons-{version}.tar.gz` | Compressed source archive (Linux/macOS) |
-| `hvt-shutdown-addons-{version}.zip`    | Compressed source archive (Windows)     |
-| `hvt-shutdown-addons-{version}.tgz`    | Packaged Helm chart                     |
-| `index.yaml`                           | Helm repository index                   |
-
-### Publishing Helm Chart to GitHub as Helm Repository
-
-GitHub can serve as your Helm chart repository using GitHub Pages.
-
-**Prerequisites:**
-
-1. Enable GitHub Pages for this repository:
-   - Go to **Settings → Pages**
-   - Set **Source** to `GitHub Actions` or `Branch`
-   - Select the `pages` branch and `/ (root)` folder
-   - Click **Save**
-
-2. Authenticate GitHub CLI:
-   ```bash
-   gh auth login
-   ```
-
-**Linux/macOS:**
-
-```bash
-# Publish to GitHub (uses origin URL by default)
-./scripts/publish_to_github.sh
-
-# Or specify repository and branch
-./scripts/publish_to_github.sh https://github.com/username/hvt-shutdown-addons.git pages
-```
-
-**Windows:**
-
-```powershell
-# Publish to GitHub (uses origin URL by default)
-.\scripts\publish_to_github.ps1
-
-# Or specify repository and branch
-.\scripts\publish_to_github.ps1 -GithubRepo "https://github.com/username/hvt-shutdown-addons.git" -Branch "pages"
-```
-
-**After publishing, install the chart:**
-
-```bash
-# Add the repository
-helm repo add hvt-shutdown https://yourusername.github.io/hvt-shutdown-addons
-
-# Update repository
-helm repo update
-
-# Install the chart
-helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system
-```
+1. Installs UI dependencies (if not present)
+2. Builds the Vue UI extension using `yarn build-pkg`
+3. Pushes the built static files to the `pages` branch
+4. GitHub Pages serves the files at `https://<owner>.github.io/<repo>/`
 
 ## Troubleshooting
 
@@ -417,24 +364,15 @@ kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/health
 
 ### v1.1.0
 
-- **Harvester UI Extension Integration**: Automatically deploys a custom Vue.js frontend extension into the Harvester dashboard when the addon is enabled. This provides a rich, native graphical interface for configuring the Authentication Token instead of relying on raw YAML editing.
+- **GitHub Pages UI Deployment**: UI static files are now built and published to GitHub Pages via `publish_ui_to_pages.sh`. No longer baked into Docker image.
+- **Reduced Docker Image Size**: Removed UI build stage from Dockerfile, significantly reducing build time and image size.
 - **Enhanced Architecture Visuals**: Replaced previous architecture diagram with a high-quality SVG vector graphic.
-- **Automated UI Builds**: The GitHub publishing scripts now seamlessly build and bundle the UI extension tarball alongside the Helm chart.
 - **UIPlugin Resource Support**: Added UIPlugin custom resource for proper Rancher UI Extensions integration.
-- **Static File Server on Port 8081**: Built-in FastAPI static file server serves UI extension assets on port 8081 for UIPlugin loading.
-- **Docker Build Optimization**: Improved Dockerfile to properly copy UI extension files (package.json, JS bundles) to the correct static serving directory.
+- **UI Plugin Endpoint**: Changed from internal static file server (port 8081) to GitHub Pages URL for UI plugin serving.
 - **ClusterIP Service for UIPlugin**: Changed from headless service to automatic ClusterIP allocation for reliable UIPlugin endpoint routing.
-- **Init Job for UIPlugin Creation**: Added Helm hook job that waits for the static file server endpoint to be available before creating the UIPlugin CR, preventing the UI plugin from getting stuck in "enabling" state.
-- **Conditional UIPlugin Creation**: Added `uiPlugin.createUIPluginResource` flag to control whether the UIPlugin CR is created automatically.
+- **Cluster-wide Shutdown Coordination**: Added peer-to-peer shutdown via HTTP POST to all DaemonSet pods.
+- **RBAC Enhancements**: Added nodes, events, namespaces, and pods/status permissions for coordinated shutdown.
 
-## UI Plugin Deployment Flow
+## License
 
-The UI plugin uses a deferred creation approach to ensure reliable deployment:
-
-1. **Helm Install** → Creates DaemonSet + ClusterIP Service
-2. **Helm Hook (post-install)** → Init Job starts and polls the endpoint
-3. **Pod Ready** → Static file server responds on port 8081
-4. **Init Job Verifies** → Confirms `package.json` is accessible
-5. **UIPlugin CR Created** → Rancher UI Extensions picks up the extension automatically
-
-This ensures the Rancher UI can always fetch the UI plugin metadata when the UIPlugin is created, eliminating the common "stuck in enabling state" issue.
+[MIT License](LICENSE)

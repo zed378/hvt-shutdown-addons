@@ -1,0 +1,155 @@
+name: Publish to GitHub Pages
+
+# Builds the UI extension and publishes the Helm chart repo to the 'pages'
+# branch, which GitHub Pages serves at:
+#   https://zed378.github.io/hvt-shutdown-addons
+#
+# This automates what the manual script does:
+#   scripts/publish_to_github.sh  (UI build + Helm package, single push)
+#
+# BEFORE FIRST USE: Enable GitHub Pages in repository settings:
+#   1. Go to https://github.com/zed378/hvt-shutdown-addons/settings/pages
+#   2. Source: Deploy from a branch
+#   3. Branch: pages  /  root (/)
+#   4. Save
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'hvt-shutdown-ui/**'
+      - 'Charts/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+
+env:
+  OWNER: zed378
+  REPO_NAME: hvt-shutdown-addons
+  PAGES_BRANCH: pages
+  UI_DIR: hvt-shutdown-ui
+
+jobs:
+  publish:
+    name: Build UI & Publish Helm + UI to Pages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Build UI Extension ──────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: hvt-shutdown-ui/.nvmrc
+          cache: yarn
+          cache-dependency-path: hvt-shutdown-ui/yarn.lock
+
+      - name: Install UI dependencies
+        working-directory: hvt-shutdown-ui
+        run: yarn install --frozen-lockfile
+
+      - name: Build UI extension
+        working-directory: hvt-shutdown-ui
+        run: yarn build-pkg hvt-shutdown-ui true
+
+      - name: Locate built version directory
+        id: ui
+        working-directory: hvt-shutdown-ui
+        run: |
+          VERSION_DIR=$(ls -d dist-pkg/hvt-shutdown-ui-* 2>/dev/null | head -1)
+          if [ -z "$VERSION_DIR" ] || [ ! -d "$VERSION_DIR" ]; then
+            echo "ERROR: No versioned build directory found in dist-pkg/"
+            ls -la dist-pkg/ || true
+            exit 1
+          fi
+          VERSION=$(basename "$VERSION_DIR" | sed 's/hvt-shutdown-ui-//')
+          echo "version=$VERSION"     >> "$GITHUB_OUTPUT"
+          echo "version_dir=$VERSION_DIR" >> "$GITHUB_OUTPUT"
+          echo "Built UI $VERSION at $VERSION_DIR"
+
+      # ── Package Helm Chart ──────────────────────────────────────────
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Extract chart metadata
+        id: chart
+        run: |
+          VERSION=$(grep '^version:' Charts/Chart.yaml | awk '{print $2}' | tr -d '"')
+          NAME=$(grep '^name:'    Charts/Chart.yaml | awk '{print $2}' | tr -d '"')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME"       >> "$GITHUB_OUTPUT"
+          echo "Chart: $NAME v$VERSION"
+
+      - name: Package Helm chart
+        run: helm package Charts/ --destination .
+
+      - name: Generate Helm index
+        run: |
+          HELM_REPO_URL="https://${{ env.OWNER }}.github.io/${{ env.REPO_NAME }}"
+          helm repo index --url "$HELM_REPO_URL" .
+          echo "=== index.yaml ===" && cat index.yaml
+
+      # ── Deploy to pages branch (single clone, single push) ──────────
+      - name: Checkout pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PAGES_BRANCH }}
+          path: pages-deploy
+
+      - name: Copy all artifacts to pages branch
+        run: |
+          UI_VERSION="${{ steps.ui.outputs.version }}"
+          UI_VERSION_DIR="hvt-shutdown-ui/${{ steps.ui.outputs.version_dir }}"
+          CHART_NAME="${{ steps.chart.outputs.name }}"
+          CHART_VERSION="${{ steps.chart.outputs.version }}"
+
+          # UI static files
+          rm -rf "pages-deploy/hvt-shutdown-ui-$UI_VERSION"
+          cp -r "$UI_VERSION_DIR" "pages-deploy/hvt-shutdown-ui-$UI_VERSION"
+          cp "$UI_VERSION_DIR/package.json" pages-deploy/package.json
+
+          # Helm artifacts
+          cp "${CHART_NAME}-${CHART_VERSION}.tgz" pages-deploy/
+          cp index.yaml pages-deploy/
+
+      - name: Commit and push all artifacts
+        working-directory: pages-deploy
+        run: |
+          UI_VERSION="${{ steps.ui.outputs.version }}"
+          CHART_NAME="${{ steps.chart.outputs.name }}"
+          CHART_VERSION="${{ steps.chart.outputs.version }}"
+          git config user.email "${{ env.OWNER }}@users.noreply.github.com"
+          git config user.name  "${{ env.OWNER }}"
+          git add "hvt-shutdown-ui-$UI_VERSION" package.json \
+                  "${CHART_NAME}-${CHART_VERSION}.tgz" index.yaml
+          git diff --cached --quiet \
+            || git commit -m "Publish UI v${UI_VERSION} and ${CHART_NAME} v${CHART_VERSION}"
+          git push origin ${{ env.PAGES_BRANCH }}
+
+      # ── Summary ─────────────────────────────────────────────────────
+      - name: Job summary
+        run: |
+          UI_VERSION="${{ steps.ui.outputs.version }}"
+          CHART_NAME="${{ steps.chart.outputs.name }}"
+          CHART_VERSION="${{ steps.chart.outputs.version }}"
+          BASE="https://${{ env.OWNER }}.github.io/${{ env.REPO_NAME }}"
+          {
+            echo "### Published to GitHub Pages"
+            echo ""
+            echo "| Asset | URL |"
+            echo "|-------|-----|"
+            echo "| Helm index  | [$BASE/index.yaml]($BASE/index.yaml) |"
+            echo "| Helm chart  | [$BASE/${CHART_NAME}-${CHART_VERSION}.tgz]($BASE/${CHART_NAME}-${CHART_VERSION}.tgz) |"
+            echo "| UIPlugin    | [$BASE]($BASE) |"
+            echo ""
+            echo "**Install:**"
+            echo "\`\`\`bash"
+            echo "helm repo add hvt-shutdown $BASE"
+            echo "helm repo update"
+            echo "helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"

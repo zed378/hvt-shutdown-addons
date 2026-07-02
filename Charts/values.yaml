@@ -20,6 +20,7 @@ daemonset:
   privileged: true
   hostIPC: false
   hostPID: true
+  terminationGracePeriodSeconds: 30
   labels:
     app: "node-shutdown"
     version: "v1"
@@ -34,10 +35,13 @@ rbac:
   rules:
     - apiGroups: ["kubevirt.io"]
       resources: ["virtualmachineinstances"]
-      verbs: ["get", "list"]
+      verbs: ["get", "list", "watch"]
     - apiGroups: [""]
-      resources: ["pods"]
+      resources: ["pods", "nodes", "events", "namespaces"]
       verbs: ["list", "delete", "get", "watch"]
+    - apiGroups: [""]
+      resources: ["pods/status"]
+      verbs: ["patch", "get"]
     - apiGroups: ["catalog.cattle.io"]
       resources: ["uiplugins"]
       verbs: ["get", "list", "create", "update", "patch"]
@@ -50,16 +54,27 @@ secret:
 
 gracePeriodSeconds: 10
 healthCheck:
+  startup:
+    path: "/healthz"
+    port: 8080
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    failureThreshold: 30
+    successThreshold: 1
   liveness:
     path: "/healthz"
     port: 8080
-    initialDelaySeconds: 15
+    initialDelaySeconds: 60
     periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
   readiness:
     path: "/healthz/ready"
     port: 8080
-    initialDelaySeconds: 5
+    initialDelaySeconds: 15
     periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
 
 hostPath:
   name: "host-root"
@@ -134,6 +149,8 @@ scripts:
   mountPath: "/opt/scripts"
 
 # Rancher UIPlugin (installed by this Helm chart)
+# UI static files are published to GitHub Pages and served at:
+# https://zed378.github.io/hvt-shutdown-addons
 uiPlugin:
   enabled: true
   # When true, creates the UIPlugin CR after the endpoint is verified available
@@ -146,17 +163,8 @@ uiPlugin:
   pluginName: hvt-shutdown-ui
   # Typically matches the UI extension version (kept aligned with chart version by default)
   pluginVersion: "1.1.0"
-  # Internal service URL for UI plugin static files (port 8081)
-  endpoint: "http://node-shutdown-webhook.harvester-system.svc.cluster.local:8081"
+  # UI plugin endpoint - served via GitHub Pages (publish_ui_to_pages.sh must run first)
+  endpoint: "https://zed378.github.io/hvt-shutdown-addons"
 
   # Rancher UIPlugin caching behavior
   noCache: false
-
-# UI plugin service (ClusterIP for port 8081)
-uiPluginService:
-  enabled: true
-  name: "node-shutdown-webhook"
-  namespace: "harvester-system"
-  clusterIP: "-" # Automatic ClusterIP allocation
-  port: 8081
-  targetPort: 8081

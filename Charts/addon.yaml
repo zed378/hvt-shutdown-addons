@@ -40,6 +40,7 @@ spec:
       privileged: true
       hostIPC: false
       hostPID: true
+      terminationGracePeriodSeconds: 30
       labels:
         app: "node-shutdown"
         version: "v1"
@@ -52,13 +53,39 @@ spec:
       rules:
         - apiGroups: ["kubevirt.io"]
           resources: ["virtualmachineinstances"]
-          verbs: ["get", "list"]
+          verbs: ["get", "list", "watch"]
         - apiGroups: [""]
-          resources: ["pods"]
+          resources: ["pods", "nodes", "events", "namespaces"]
           verbs: ["list", "delete", "get", "watch"]
+        - apiGroups: [""]
+          resources: ["pods/status"]
+          verbs: ["patch", "get"]
         - apiGroups: ["catalog.cattle.io"]
           resources: ["uiplugins"]
           verbs: ["get", "list", "create", "update", "patch"]
+
+    healthCheck:
+      startup:
+        path: "/healthz"
+        port: 8080
+        initialDelaySeconds: 0
+        periodSeconds: 10
+        failureThreshold: 30
+        successThreshold: 1
+      liveness:
+        path: "/healthz"
+        port: 8080
+        initialDelaySeconds: 60
+        periodSeconds: 20
+        timeoutSeconds: 5
+        failureThreshold: 3
+      readiness:
+        path: "/healthz/ready"
+        port: 8080
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
 
     secret:
       name: "node-shutdown-auth"
@@ -66,18 +93,6 @@ spec:
       type: "Opaque"
       key: "auth-token"
 
-    gracePeriodSeconds: 10
-    healthCheck:
-      liveness:
-        path: "/healthz"
-        port: 8080
-        initialDelaySeconds: 15
-        periodSeconds: 20
-      readiness:
-        path: "/healthz/ready"
-        port: 8080
-        initialDelaySeconds: 5
-        periodSeconds: 10
 
     hostPath:
       name: "host-root"
@@ -144,3 +159,17 @@ spec:
       # When enabled, only allows ingress on the health check port
       # For production, consider adding source CIDR restrictions
       ingressFromCidr: null # e.g., "10.0.0.0/8"
+
+    # Rancher UIPlugin configuration
+    # UI static files are published to GitHub Pages and served at:
+    # https://zed378.github.io/hvt-shutdown-addons
+    uiPlugin:
+      enabled: true
+      createUIPluginResource: true
+      name: hvt-shutdown-ui
+      namespace: cattle-ui-plugin-system
+      pluginName: hvt-shutdown-ui
+      pluginVersion: "1.1.0"
+      # UI plugin endpoint - served via GitHub Pages (publish_ui_to_pages.sh must run first)
+      endpoint: "https://zed378.github.io/hvt-shutdown-addons"
+      noCache: false

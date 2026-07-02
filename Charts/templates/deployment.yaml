@@ -51,6 +51,7 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ .Values.rbac.serviceAccountName }}
+      terminationGracePeriodSeconds: {{ .Values.daemonset.terminationGracePeriodSeconds }}
       hostNetwork: {{ .Values.daemonset.hostNetwork }}
       hostIPC: {{ .Values.daemonset.hostIPC }}
       hostPID: {{ .Values.daemonset.hostPID }}
@@ -65,18 +66,30 @@ spec:
             runAsUser: 0
             runAsGroup: 0
             {{- end }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.healthCheck.startup.path }}
+              port: {{ .Values.healthCheck.startup.port }}
+            initialDelaySeconds: {{ .Values.healthCheck.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthCheck.startup.periodSeconds }}
+            failureThreshold: {{ .Values.healthCheck.startup.failureThreshold }}
+            successThreshold: {{ .Values.healthCheck.startup.successThreshold }}
           livenessProbe:
             httpGet:
               path: {{ .Values.healthCheck.liveness.path }}
               port: {{ .Values.healthCheck.liveness.port }}
             initialDelaySeconds: {{ .Values.healthCheck.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthCheck.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.healthCheck.liveness.failureThreshold }}
           readinessProbe:
             httpGet:
               path: {{ .Values.healthCheck.readiness.path }}
               port: {{ .Values.healthCheck.readiness.port }}
             initialDelaySeconds: {{ .Values.healthCheck.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthCheck.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.healthCheck.readiness.failureThreshold }}
           env:
             - name: NODE_NAME
               valueFrom:
