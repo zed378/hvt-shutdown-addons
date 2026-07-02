@@ -115,7 +115,7 @@ cd "$UI_SRC_DIR"
 
 if [ ! -d "node_modules" ]; then
     echo "Installing UI dependencies..."
-    yarn install --frozen-lockfile 2>/dev/null || npm install
+    yarn install --immutable 2>/dev/null || npm install
 fi
 
 yarn build-pkg "$UI_DIR" true

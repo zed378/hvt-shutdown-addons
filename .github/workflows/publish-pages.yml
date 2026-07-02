@@ -75,7 +75,7 @@ jobs:
 
       - name: Install UI dependencies
         working-directory: hvt-shutdown-ui
-        run: yarn install --frozen-lockfile
+        run: yarn install --immutable
 
       - name: Generate UI plugin static files
         working-directory: hvt-shutdown-ui

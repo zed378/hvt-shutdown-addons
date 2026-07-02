@@ -124,7 +124,7 @@ Set-Location $UiSrcDir
 
 if (-not (Test-Path "node_modules")) {
     Write-Host "Installing UI dependencies..." -ForegroundColor Yellow
-    if ($pkgMgr -eq "yarn") { yarn install --frozen-lockfile } else { npm install }
+    if ($pkgMgr -eq "yarn") { yarn install --immutable } else { npm install }
 }
 
 yarn build-pkg $UiDir true
