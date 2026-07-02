@@ -46,6 +46,7 @@ venv/
 ENV/
 env/
 .venv
+node_modules/
 
 # IDE
 .vscode/

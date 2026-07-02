@@ -19,6 +19,7 @@ docker-compose*.yml
 *.egg-info/
 Charts
 tests
+*/node_modules
 
 # agents
 .kilo

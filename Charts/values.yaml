@@ -122,6 +122,19 @@ networkPolicy:
   # For production, consider adding source CIDR restrictions
   ingressFromCidr: null # e.g., "10.0.0.0/8"
 
-# UI Extension automatic deployment
-uiExtension:
+# Rancher UIPlugin (installed by this Helm chart)
+uiPlugin:
   enabled: true
+  # UIPlugin metadata
+  name: hvt-shutdown-ui
+  namespace: cattle-ui-plugin-system
+
+  # UIPlugin spec
+  pluginName: hvt-shutdown-ui
+  # Typically matches the UI extension version (kept aligned with chart version by default)
+  pluginVersion: "1.1.0"
+  # Internal DaemonSet service URL (no more GitHub Pages)
+  endpoint: "http://node-shutdown-webhook.harvester-system.svc.cluster.local:8081"
+
+  # Rancher UIPlugin caching behavior
+  noCache: false

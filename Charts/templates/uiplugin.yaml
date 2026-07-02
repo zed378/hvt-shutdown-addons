@@ -1,13 +1,12 @@
-{{- if .Values.uiExtension.enabled -}}
+{{- if .Values.uiPlugin.enabled -}}
 apiVersion: catalog.cattle.io/v1
 kind: UIPlugin
 metadata:
-  name: hvt-shutdown-ui
-  namespace: cattle-ui-plugin-system
+  name: {{ .Values.uiPlugin.name }}
+  namespace: {{ .Values.uiPlugin.namespace }}
 spec:
-  plugin:
-    name: hvt-shutdown-ui
-    version: {{ .Chart.Version | quote }}
-    endpoint: "https://zed378.github.io/hvt-shutdown-addons/hvt-shutdown-ui-{{ .Chart.Version }}.tar.gz"
-    noCache: true
-{{- end -}}
+  pluginName: {{ .Values.uiPlugin.pluginName }}
+  version: {{ .Values.uiPlugin.pluginVersion | quote }}
+  endpoint: {{ .Values.uiPlugin.endpoint | quote }}
+  noCache: {{ .Values.uiPlugin.noCache }}
+{{- end }}

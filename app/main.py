@@ -107,6 +107,30 @@ rate_limiter = RateLimiter(MAX_REQUESTS_PER_MINUTE, RATE_LIMIT_WINDOW)
 security = HTTPBearer()
 
 
+
+# Background static file server for Rancher UIPlugin endpoint on port 8081
+STATIC_DIR = Path(__file__).parent / "static" / "ui-plugin"
+_ui_static_task = None
+
+
+def _start_static_server():
+    """Start a background FastAPI static file server on port 8081."""
+    if not STATIC_DIR.exists():
+        logger.warning("Static UI plugin directory not found, skipping static server")
+        return
+    from fastapi import FastAPI as _FastAPI
+    from fastapi.staticfiles import StaticFiles
+    import uvicorn as _uvicorn
+
+    static_app = _FastAPI()
+    static_app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=False), name="ui-plugin")
+    cfg = _uvicorn.Config(static_app, host="0.0.0.0", port=8081, log_level="warning")
+    server = _uvicorn.Server(cfg)
+    _loop = asyncio.new_event_loop()
+    _loop.run_until_complete(server.serve())
+    _loop.close()
+
+
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Verify authentication token with constant-time comparison."""
     if not AUTH_TOKEN:
