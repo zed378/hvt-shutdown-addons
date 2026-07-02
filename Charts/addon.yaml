@@ -12,7 +12,7 @@ spec:
   # Helm chart repository URL
   repo: "https://zed378.github.io/hvt-shutdown-addons/"
   # Chart version
-  version: "1.0.0"
+  version: "1.1.0"
   # Chart name (must match chart.yaml name)
   chart: node-shutdown
   # Values to pass to the Helm chart - will be merged with chart's values.yaml
@@ -23,8 +23,8 @@ spec:
       #   openssl rand -hex 32
       # For Helm, the token is automatically base64 encoded via {{ .Values.auth.token | b64enc }}
       # WARNING: This token MUST be set before deployment. An empty token will cause 500 errors.
-      # TODO: Replace with your own secure random token before deploying
-      token: "pQLeDmkxhMpyaYUU3v143bVuZC9BgGczRKWjM8HiRt9rU1EZ3SzjZ063ZdiwYFap"
+      # You can now configure this directly via the Harvester Add-on UI.
+      token: ""
 
     image:
       registry: "zed378"

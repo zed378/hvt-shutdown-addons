@@ -134,6 +134,13 @@ kubectl apply -f Charts/addon.yaml
 kubectl patch addon node-shutdown -n harvester-system --type=json -p '[{"op": "replace", "path": "/spec/enabled", "value": true}]'
 ```
 
+Once enabled, the Add-on's bundled Harvester UI extension is automatically injected into the Harvester Dashboard.
+
+To configure your Authentication Token:
+1. Navigate to **Advanced -> Addons** in your Harvester UI.
+2. Click **Edit Config** on the `node-shutdown` addon.
+3. You will see a custom graphical interface! Enter your secure token into the **Authentication Token** field and click Save.
+
 ### 8. Access the API via NodePort
 
 After the DaemonSet is running, you can access the API using the chart's NodePort (default **30888**):
@@ -403,3 +410,11 @@ kubectl describe addon node-shutdown -n harvester-system
 # Test health endpoints
 kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/healthz
 ```
+
+## Changelog
+
+### v1.1.0
+- **Harvester UI Extension Integration**: Automatically deploys a custom Vue.js frontend extension into the Harvester dashboard when the addon is enabled. This provides a rich, native graphical interface for configuring the Authentication Token instead of relying on raw YAML editing.
+- **Enhanced Architecture Visuals**: Replaced previous architecture diagram with a high-quality SVG vector graphic.
+- **Automated UI Builds**: The GitHub publishing scripts now seamlessly build and bundle the UI extension tarball alongside the Helm chart.
+

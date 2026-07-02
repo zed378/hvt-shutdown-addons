@@ -35,7 +35,8 @@ PROJECT_ROOT="$SCRIPT_DIR/.."
 CHART_DIR="$PROJECT_ROOT/Charts"
 
 # Generated files in root directory
-CHART_TGZ_FILE="$PROJECT_ROOT/node-shutdown-1.0.0.tgz"
+CHART_TGZ_FILE="$PROJECT_ROOT/node-shutdown-1.1.0.tgz"
+UI_PACKAGE_FILE="$PROJECT_ROOT/hvt-shutdown-ui/dist-pkg/hvt-shutdown-ui-1.1.0.tar.gz"
 INDEX_YAML_FILE="$PROJECT_ROOT/index.yaml"
 TEMP_DIR=$(mktemp -d)
 
@@ -77,6 +78,24 @@ echo ""
 echo "=== Packaging Helm chart to root ==="
 helm package "$CHART_DIR" --destination "$PROJECT_ROOT"
 
+# Build the UI extension package
+echo "=== Building UI extension package ==="
+cd "$PROJECT_ROOT/hvt-shutdown-ui"
+# Ensure dependencies are installed and run build-pkg
+if command -v yarn &> /dev/null; then
+    yarn build-pkg hvt-shutdown-ui true
+elif command -v yarn.cmd &> /dev/null; then
+    yarn.cmd build-pkg hvt-shutdown-ui true
+elif command -v npm &> /dev/null; then
+    npm run build-pkg -- hvt-shutdown-ui true
+elif command -v npm.cmd &> /dev/null; then
+    npm.cmd run build-pkg -- hvt-shutdown-ui true
+else
+    echo "Error: Neither yarn nor npm was found in the path."
+    exit 1
+fi
+cd "$PROJECT_ROOT"
+
 if [ ! -f "$CHART_TGZ_FILE" ]; then
     echo "Error: Failed to package Helm chart."
     rm -rf "$TEMP_DIR"
@@ -84,7 +103,9 @@ if [ ! -f "$CHART_TGZ_FILE" ]; then
 fi
 
 CHART_FILENAME=$(basename "$CHART_TGZ_FILE")
+UI_FILENAME=$(basename "$UI_PACKAGE_FILE")
 echo "Chart: $CHART_FILENAME"
+echo "UI Package: $UI_FILENAME"
 
 # Generate index.yaml in root directory
 echo "Generating index.yaml in root..."
@@ -112,8 +133,14 @@ cd "$PAGES_DIR"
 
 # Copy generated files
 cp "$CHART_TGZ_FILE" "$PAGES_DIR/"
+if [ -f "$UI_PACKAGE_FILE" ]; then
+    cp "$UI_PACKAGE_FILE" "$PAGES_DIR/"
+else
+    echo "Warning: UI package file not found at $UI_PACKAGE_FILE"
+fi
 cp "$INDEX_YAML_FILE" "$PAGES_DIR/"
-git add $CHART_FILENAME index.yaml
+
+git add $CHART_FILENAME $UI_FILENAME index.yaml
 git config user.email "${OWNER}@users.noreply.github.com"
 git config user.name "$OWNER"
 git commit -m "Add helm chart $CHART_FILENAME" --allow-empty || echo "No changes to commit"
