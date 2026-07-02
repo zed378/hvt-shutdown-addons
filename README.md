@@ -45,6 +45,12 @@ This service runs as a DaemonSet on each node in a Harvester cluster. It exposes
 - **NetworkPolicy Support**: Optional Kubernetes NetworkPolicy to restrict ingress traffic
 - **NodePort Access**: Exposed via NodePort with authentication protecting the API
 
+API base URL (example):
+
+- `http://VIP:30888` (NodePort)
+- Shutdown endpoint: `POST /system/shutdown`
+- Health endpoint: `GET /healthz`
+
 ### Container Security
 
 - **Non-root User**: Dockerfile includes `appuser` for non-root execution
@@ -123,7 +129,26 @@ spec:
 kubectl apply -f Charts/addon.yaml
 
 # Enable the add-on (toggle enabled: true in addon.yaml, or:)
-kubectl patch addon node-shutdown -n harvester-local-storage --type=json -p '[{"op": "replace", "path": "/spec/enabled", "value": true}]'
+kubectl patch addon node-shutdown -n harvester-system --type=json -p '[{"op": "replace", "path": "/spec/enabled", "value": true}]'
+```
+
+### 8. Access the API via NodePort
+
+After the DaemonSet is running, you can access the API using the chart's NodePort (default **30888**):
+
+- Base URL: `http://VIP:30888`
+
+**Health check:**
+
+```bash
+curl http://VIP:30888/healthz
+```
+
+**Trigger shutdown:**
+
+```bash
+curl -X POST http://VIP:30888/system/shutdown \
+  -H "Authorization: Bearer your-secret-token"
 ```
 
 ## Architecture
@@ -158,12 +183,20 @@ graph TB
 
 ### POST /system/shutdown
 
-Initiates a graceful shutdown sequence on the node where the service is running.
+Initiates a shutdown sequence.
+
+- If called normally (no query param), the service coordinates a **cluster-wide** shutdown by calling peer nodes, then starts the local VM shutdown + host poweroff.
+- If called with `?all_nodes=false` (internal/peer calls), it performs **local-only** shutdown.
 
 **Authentication:** Bearer token required in `Authorization` header.
 
 ```bash
-curl -X POST http://localhost:8080/system/shutdown \
+# NodePort access (recommended)
+curl -X POST http://VIP:30888/system/shutdown \
+  -H "Authorization: Bearer your-secret-token"
+
+# (Optional) local-only shutdown used for peer coordination
+curl -X POST "http://VIP:30888/system/shutdown?all_nodes=false" \
   -H "Authorization: Bearer your-secret-token"
 ```
 
@@ -377,7 +410,7 @@ helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system
 
 ```bash
 # Check addon status
-kubectl get addon -n harvester-local-storage
+kubectl get addon -n harvester-system
 
 # Check daemonset pods
 kubectl get pods -n harvester-system -l app=node-shutdown
@@ -386,7 +419,7 @@ kubectl get pods -n harvester-system -l app=node-shutdown
 kubectl logs -n harvester-system -l app=node-shutdown
 
 # Check addon events
-kubectl describe addon node-shutdown -n harvester-local-storage
+kubectl describe addon node-shutdown -n harvester-system
 
 # Test health endpoints
 kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/healthz
