@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # hvt-shutdown-addons
 
 Secure node shutdown service for Harvester clusters. Deploys as a DaemonSet to safely power off Harvester nodes by gracefully terminating VM workloads.
