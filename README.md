@@ -45,9 +45,11 @@ This service runs as a DaemonSet on each node in a Harvester cluster. It exposes
 - **NetworkPolicy Support**: Optional Kubernetes NetworkPolicy to restrict ingress traffic
 - **NodePort Access**: Exposed via NodePort with authentication protecting the API
 
+**VIP (Virtual IP)** is any node's IP address in your Harvester cluster, or a load-balancer virtual IP that distributes traffic across cluster nodes. Using VIP allows you to access the API through any node in the cluster via the NodePort.
+
 API base URL (example):
 
-- `http://VIP:30888` (NodePort)
+- `http://VIP:30888` (NodePort — replace `VIP` with any cluster node IP or load-balancer VIP)
 - Shutdown endpoint: `POST /system/shutdown`
 - Health endpoint: `GET /healthz`
 
@@ -136,7 +138,8 @@ kubectl patch addon node-shutdown -n harvester-system --type=json -p '[{"op": "r
 
 After the DaemonSet is running, you can access the API using the chart's NodePort (default **30888**):
 
-- Base URL: `http://VIP:30888`
+- **Base URL**: `http://VIP:30888` (replace `VIP` with any cluster node IP or load-balancer VIP)
+- Replace `VIP` with your Harvester cluster node IP address, e.g., `http://192.168.1.100:30888`
 
 **Health check:**
 
