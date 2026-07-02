@@ -156,31 +156,7 @@ curl -X POST http://VIP:30888/system/shutdown \
 
 ## Architecture
 
-```mermaid
-graph TB
-    subgraph HarvesterCluster["Harvester Cluster"]
-        subgraph Namespace["harvester-system Namespace"]
-            subgraph DaemonSet["DaemonSet: node-shutdown-webhook"]
-                subgraph Container["FastAPI Container :8080"]
-                    API["API Endpoints<br/>POST /system/shutdown<br/>GET /healthz<br/>GET /healthz/ready<br/>GET /healthz/k8s"]
-                    Client["K8s API Client<br/>- List pods<br/>- Delete virt-launchers"]
-                end
-            end
-            AddonCRD["Addon CRD<br/>harvesterhci.io/v1beta1<br/>enabled/disabled toggle"]
-        end
-        subgraph Nodes["Physical Nodes"]
-            NodeA["Node A<br/>virt-launcher-vm1<br/>virt-launcher-vm2"]
-            NodeB["Node B<br/>virt-launcher-vm3"]
-        end
-    end
-
-    API --> Client
-    AddonCRD -. Manages .-> DaemonSet
-    DaemonSet --> NodeA
-    DaemonSet --> NodeB
-    NodeA -. Shutdown → delete VMs → poweroff .-> NodeA
-    NodeB -. Shutdown → delete VMs → poweroff .-> NodeB
-```
+![Architecture Diagram](architecture.svg)
 
 ## API Endpoints
 
@@ -226,13 +202,12 @@ curl -X POST "http://VIP:30888/system/shutdown?all_nodes=false" \
 
 **Error Responses:**
 
-| Status Code | Meaning |
-
+| Status Code | Meaning                                         |
 | ----------- | ----------------------------------------------- |
-| 401 | Invalid or missing authentication token |
-| 409 | Shutdown already in progress |
-| 429 | Rate limit exceeded |
-| 500 | Server error (missing config, shutdown failure) |
+| 401         | Invalid or missing authentication token         |
+| 409         | Shutdown already in progress                    |
+| 429         | Rate limit exceeded                             |
+| 500         | Server error (missing config, shutdown failure) |
 
 ### GET /healthz
 
@@ -428,174 +403,3 @@ kubectl describe addon node-shutdown -n harvester-system
 # Test health endpoints
 kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/healthz
 ```
-  "timestamp": "2026-06-30T04:21:00+00:00"
-}
-```
-
-## Configuration
-
-All values are in `Charts/values.yaml`:
-
-| Variable                            | Description                           | Default        |
-| ----------------------------------- | ------------------------------------- | -------------- |
-| `auth.token`                        | Bearer token for API authentication   | **(required)** |
-| `image.registry`                    | Docker image registry                 | zed378         |
-| `image.repository`                  | Docker image name                     | hvt-shutdown   |
-| `image.tag`                         | Docker image tag                      | latest         |
-| `gracePeriodSeconds`                | Pod termination grace period          | 10             |
-| `vmShutdownTimeout`                 | Max wait time for VMs before poweroff | 120            |
-| `rateLimiting.maxRequestsPerMinute` | Rate limit threshold                  | 10             |
-| `auditLogging.enabled`              | Enable audit logging                  | true           |
-| `networkPolicy.enabled`             | Enable Kubernetes NetworkPolicy       | false          |
-
-## Security Best Practices
-
-1. **Generate Strong Tokens**: Always use `openssl rand -hex 32` or similar for auth tokens
-2. **Enable NetworkPolicy**: Set `networkPolicy.enabled: true` to restrict access
-3. **Restrict NodePort**: Use firewall rules to limit access to NodePort range
-4. **Monitor Audit Logs**: Regularly review `/var/log/shutdown-audit.log`
-5. **Rotate Tokens**: Periodically change `AUTH_TOKEN` and update the Kubernetes secret
-6. **Use TLS**: Deploy with an ingress controller that provides TLS termination
-
-## Testing
-
-```bash
-pip install -r requirements.txt
-pytest tests/ -v
-```
-
-## Scripts
-
-All scripts are located in the `scripts/` directory:
-
-| Script                          | Platform             | Description                                |
-| ------------------------------- | -------------------- | ------------------------------------------ |
-| `scripts/publish_chart.sh`      | Linux/macOS (bash)   | Package Helm chart and generate index.yaml |
-| `scripts/publish_chart.mac.sh`  | macOS (zsh)          | macOS-optimized chart publishing script    |
-| `scripts/publish_chart.ps1`     | Windows (PowerShell) | Windows chart publishing script            |
-| `scripts/publish_to_github.sh`  | Linux/macOS (bash)   | Publish chart to GitHub Pages as Helm repo |
-| `scripts/publish_to_github.ps1` | Windows (PowerShell) | Publish chart to GitHub Pages as Helm repo |
-| `scripts/create_release.sh`     | Linux/macOS (bash)   | Interactive GitHub release creator         |
-| `scripts/create_release.ps1`    | Windows (PowerShell) | Windows GitHub release creator             |
-
-### Creating a GitHub Release
-
-**Prerequisites:**
-
-- [Helm](https://helm.sh/docs/intro/install/) installed
-- [GitHub CLI](https://cli.github.com/) authenticated (`gh auth login`)
-
-**Linux/macOS:**
-
-```bash
-# Interactive mode (prompts for version)
-./scripts/create_release.sh
-
-# Or with specific version
-./scripts/create_release.sh 1.0.0 v1.0.0 "Initial release"
-
-# Create as draft or pre-release
-./scripts/create_release.sh 1.0.0 --draft
-./scripts/create_release.sh 1.0.0 --prerelease
-```
-
-**Windows:**
-
-```powershell
-# Interactive mode
-.\scripts\create_release.ps1
-
-# Or with specific version
-.\scripts\create_release.ps1 -Version "1.0.0" -Message "Initial release"
-```
-
-The script will:
-
-1. Package the Helm chart into `charts-output/*.tgz`
-2. Generate `index.yaml` for the Helm repository
-3. Create a compressed archive of the repository state:
-   - **Linux/macOS**: `hvt-shutdown-addons-{version}.tar.gz`
-   - **Windows**: `hvt-shutdown-addons-{version}.zip`
-4. Place all artifacts in `releases/` directory
-5. Provide the `gh release create` command to upload artifacts to GitHub
-
-### Release Artifacts
-
-Each release includes the following files in the `releases/` directory:
-
-| File                                   | Description                             |
-| -------------------------------------- | --------------------------------------- |
-| `hvt-shutdown-addons-{version}.tar.gz` | Compressed source archive (Linux/macOS) |
-| `hvt-shutdown-addons-{version}.zip`    | Compressed source archive (Windows)     |
-| `hvt-shutdown-addons-{version}.tgz`    | Packaged Helm chart                     |
-| `index.yaml`                           | Helm repository index                   |
-
-### Publishing Helm Chart to GitHub as Helm Repository
-
-GitHub can serve as your Helm chart repository using GitHub Pages.
-
-**Prerequisites:**
-
-1. Enable GitHub Pages for this repository:
-   - Go to **Settings → Pages**
-   - Set **Source** to `GitHub Actions` or `Branch`
-   - Select the `pages` branch and `/ (root)` folder
-   - Click **Save**
-
-2. Authenticate GitHub CLI:
-   ```bash
-   gh auth login
-   ```
-
-**Linux/macOS:**
-
-```bash
-# Publish to GitHub (uses origin URL by default)
-./scripts/publish_to_github.sh
-
-# Or specify repository and branch
-./scripts/publish_to_github.sh https://github.com/username/hvt-shutdown-addons.git pages
-```
-
-**Windows:**
-
-```powershell
-# Publish to GitHub (uses origin URL by default)
-.\scripts\publish_to_github.ps1
-
-# Or specify repository and branch
-.\scripts\publish_to_github.ps1 -GithubRepo "https://github.com/username/hvt-shutdown-addons.git" -Branch "pages"
-```
-
-**After publishing, install the chart:**
-
-```bash
-# Add the repository
-helm repo add hvt-shutdown https://yourusername.github.io/hvt-shutdown-addons
-
-# Update repository
-helm repo update
-
-# Install the chart
-helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system
-```
-
-## Troubleshooting
-
-```bash
-# Check addon status
-kubectl get addon -n harvester-system
-
-# Check daemonset pods
-kubectl get pods -n harvester-system -l app=node-shutdown
-
-# View pod logs
-kubectl logs -n harvester-system -l app=node-shutdown
-
-# Check addon events
-kubectl describe addon node-shutdown -n harvester-system
-
-# Test health endpoints
-kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/healthz
-```
->>>>>>> 35cafef (docs: add architecture SVG diagram and update README)
