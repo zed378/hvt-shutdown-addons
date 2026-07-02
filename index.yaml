@@ -3,9 +3,9 @@ entries:
   node-shutdown:
   - apiVersion: v2
     appVersion: 1.1.0
-    created: "2026-07-02T13:10:50.670866841+07:00"
+    created: "2026-07-02T13:21:26.317160442+07:00"
     description: Secure node shutdown service for Harvester clusters
-    digest: a071f3cc505db1eaa395d7d8d596886e2bbe6843e8753c43178993c592fb975b
+    digest: ff938517bd45d1d3aadc63ab030e20b4d79a5ff73f81d607e680c0aa935c60f5
     keywords:
     - harvester
     - shutdown
@@ -19,4 +19,4 @@ entries:
     urls:
     - https://zed378.github.io/hvt-shutdown-addons/node-shutdown-1.1.0.tgz
     version: 1.1.0
-generated: "2026-07-02T13:10:50.647490868+07:00"
+generated: "2026-07-02T13:21:26.290235941+07:00"
