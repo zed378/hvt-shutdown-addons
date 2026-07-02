@@ -9,18 +9,7 @@ kind: ClusterRole
 metadata:
   name: {{ .Values.rbac.clusterRoleName }}
 rules:
-  - apiGroups:
-{{ toYaml .Values.rbac.apiGroups_kubevirt | nindent 6 }}
-    resources:
-{{ toYaml .Values.rbac.resources_kubevirt | nindent 6 }}
-    verbs:
-{{ toYaml .Values.rbac.verbs_kubevirt | nindent 6 }}
-  - apiGroups:
-{{ toYaml .Values.rbac.apiGroups_core | nindent 6 }}
-    resources:
-{{ toYaml .Values.rbac.resources_core | nindent 6 }}
-    verbs:
-{{ toYaml .Values.rbac.verbs_core | nindent 6 }}
+{{- toYaml .Values.rbac.rules | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -111,7 +100,7 @@ spec:
             - name: NODE_PORT
               value: "{{ .Values.nodePort.nodePort }}"
           resources:
-{{ toYaml .Values.resources | indent 12 }}
+{{ toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: {{ .Values.hostPath.name }}
               mountPath: {{ .Values.hostPath.mountPath }}

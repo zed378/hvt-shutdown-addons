@@ -40,6 +40,19 @@ CHART_DIR="$PROJECT_ROOT/Charts"
 CHART_VERSION=$(grep '^version:' "$CHART_DIR/Chart.yaml" | awk '{print $2}' | tr -d '"')
 CHART_NAME=$(grep '^name:' "$CHART_DIR/Chart.yaml" | awk '{print $2}' | tr -d '"')
 
+# Copy scripts to Charts directory for inclusion in ConfigMap
+echo "=== Copying scripts to Charts directory ==="
+mkdir -p "$CHART_DIR/scripts"
+# Copy only publishing scripts (not init.sh which is already in Charts/scripts/)
+for f in "$PROJECT_ROOT/scripts"/*.sh; do
+  base=$(basename "$f")
+  if [ "$base" != "publish_to_github.sh" ]; then
+    cp "$f" "$CHART_DIR/scripts/"
+  fi
+done
+cp "$PROJECT_ROOT/scripts"/*.ps1 "$CHART_DIR/scripts/" 2>/dev/null || true
+cp "$PROJECT_ROOT/scripts"/*.mac.sh "$CHART_DIR/scripts/" 2>/dev/null || true
+
 # Derived paths using dynamic version
 CHART_TGZ_FILE="$PROJECT_ROOT/${CHART_NAME}-${CHART_VERSION}.tgz"
 INDEX_YAML_FILE="$PROJECT_ROOT/index.yaml"
@@ -129,12 +142,20 @@ git push origin "$BRANCH"
 
 cd "$PROJECT_ROOT"
 
-# Delete generated files from root
+# Delete only the copied publishing scripts, preserve init.sh
 echo ""
-echo "=== Cleaning up generated files ==="
+echo "=== Cleaning up copied publishing scripts ==="
+rm -f "$CHART_DIR/scripts/publish_to_github.sh"
+rm -f "$CHART_DIR/scripts/publish_chart.sh"
+rm -f "$CHART_DIR/scripts/create_release.sh"
+rm -f "$CHART_DIR/scripts/publish_to_github.ps1"
+rm -f "$CHART_DIR/scripts/publish_chart.ps1"
+rm -f "$CHART_DIR/scripts/publish_chart.mac.sh"
+rm -f "$CHART_DIR/scripts/create_release.ps1"
 rm -f "$CHART_TGZ_FILE"
 rm -f "$INDEX_YAML_FILE"
-echo "Removed generated files from root."
+rm -rf "$PROJECT_ROOT/charts-output/" "$PROJECT_ROOT/releases/" 2>/dev/null || true
+echo "Removed generated files, copied scripts from Charts/, and build artifacts."
 
 echo ""
 echo "=== Chart published successfully ==="
@@ -148,6 +169,4 @@ echo "  helm repo update"
 echo "  helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system"
 echo ""
 
-# Cleanup
-cd "$PROJECT_ROOT"
 rm -rf "$TEMP_DIR"

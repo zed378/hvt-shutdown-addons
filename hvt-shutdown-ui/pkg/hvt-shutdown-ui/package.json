@@ -1,12 +1,22 @@
 {
   "name": "hvt-shutdown-ui",
-  "description": "hvt-shutdown-ui plugin",
+  "description": "Node Shutdown UI Extension for Harvester",
   "version": "1.1.0",
   "private": false,
+  "main": "index.ts",
   "rancher": {
     "annotations": {
-      "catalog.cattle.io/rancher-version": ">= 2.10.0",
-      "catalog.cattle.io/ui-extensions-version": ">= 3.0.0 < 4.0.0"
+      "catalog.cattle.io/certified": "partner",
+      "catalog.cattle.io/k8s-version": ">=1.30.0 <=1.33.0",
+      "catalog.cattle.io/namespace": "cattle-ui-plugin-system",
+      "catalog.cattle.io/parent-cluster": "self",
+      "catalog.cattle.io/ui-component": "shell",
+      "catalog.cattle.io/ui-display-name": "Node Shutdown",
+      "catalog.cattle.io/ui-extensions-version": ">=3.0.0 <4.0.0",
+      "catalog.cattle.io/ui-repository": "harvester",
+      "catalog.cattle.io/ui-rancher-version": ">=1.6.0",
+      "catalog.cattle.io/ui-type": "plugin",
+      "catalog.cattle.io/ui-plugin-name": "hvt-shutdown-ui"
     }
   },
   "scripts": {},

@@ -7,6 +7,7 @@ import time
 import asyncio
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from pathlib import Path
 import threading
 from threading import Lock
 import urllib.request
@@ -109,7 +110,7 @@ security = HTTPBearer()
 
 
 # Background static file server for Rancher UIPlugin endpoint on port 8081
-STATIC_DIR = Path(__file__).parent / "static" / "ui-plugin"
+STATIC_DIR = Path("/app/static/ui-plugin")
 _ui_static_task = None
 
 
@@ -164,13 +165,22 @@ async def lifespan(app: FastAPI):
     # Initialize Kubernetes connection
     try:
         config.load_incluster_config()
+        logger.info("Connected to Kubernetes cluster using in-cluster config")
     except config.ConfigException:
         try:
             config.load_kube_config()
+            logger.info("Connected to Kubernetes cluster using kube config")
         except Exception as kube_err:
             logger.warning(f"Kubernetes config not available: {kube_err}")
+            k8s_core = None
+            yield
+            return
 
-    k8s_core = client.CoreV1Api()
+    try:
+        k8s_core = client.CoreV1Api()
+    except Exception as e:
+        logger.warning(f"Failed to create Kubernetes client: {e}, continuing without it")
+        k8s_core = None
 
     global _app_shutdown_event
     _app_shutdown_event = asyncio.Event()
@@ -267,6 +277,11 @@ async def k8s_readiness_check():
                 namespace = f.read().strip()
         except Exception:
             pass
+        if k8s_core is None:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"status": "unavailable", "detail": "Kubernetes client not initialized"},
+            )
         k8s_core.list_namespaced_pod(namespace=namespace, limit=1)
         return {"status": "ready", "k8s": "connected", "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as e:

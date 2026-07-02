@@ -8,15 +8,12 @@ RUN yarn install --frozen-lockfile 2>/dev/null || npm install
 # Build the UI package; version is read from package.json automatically
 RUN yarn build-pkg hvt-shutdown-ui true
 
-# ---- Stage 2: Python runtime with static files ----
+# ---- Stage 2: Python runtime with FastAPI static file serving ----
 FROM python:3.11-slim
+
 WORKDIR /app
 
 RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    coreutils \
-    util-linux \
-    && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 COPY requirements.txt .
@@ -25,20 +22,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy API app
 COPY app/ ./app
 
-# Copy static UI files from builder stage
-RUN mkdir -p /app/static/ui-plugin/plugin
+# Copy UI builder output and place static files for FastAPI to serve on port 8081
+RUN mkdir -p /app/static/ui-plugin
+COPY --from=ui-builder /build/dist-pkg/ /tmp/ui-dist/
+# Copy all files from the built package directory (flexible glob for Rancher build-pkg output)
+RUN ls /tmp/ui-dist/ | grep '^hvt-shutdown-ui-' | head -1 | xargs -I{} cp /tmp/ui-dist/{}/package.json /app/static/ui-plugin/
+RUN ls /tmp/ui-dist/ | grep '^hvt-shutdown-ui-' | head -1 | xargs -I{} sh -c 'cp "$1"/*.js /app/static/ui-plugin/ 2>/dev/null || cp "$1"/* /app/static/ui-plugin/ 2>/dev/null || true' _
 
-# Copy package.json into plugin/ subdirectory (use wildcard for versioned dir)
-COPY --from=ui-builder /build/dist-pkg/hvt-shutdown-ui-*/package.json /app/static/ui-plugin/plugin/package.json
-
-# Copy all built JS bundles (*.umd.min.js excludes .map files)
-COPY --from=ui-builder /build/dist-pkg/hvt-shutdown-ui-*/hvt-shutdown-ui-*.umd.min.js /app/static/ui-plugin/
-
-# Generate files.txt manifest dynamically from built files
-RUN (echo "plugin/package.json" && find /app/static/ui-plugin -maxdepth 1 -name "*.umd.min.js" -printf "%f\n") \
-    > /app/static/ui-plugin/files.txt
+# Copy scripts into the container for runtime use
+RUN mkdir -p /app/scripts
+COPY scripts/init.sh /app/scripts/init.sh
+RUN chmod +x /app/scripts/init.sh
 
 RUN chown -R appuser:appuser /app
+
 EXPOSE 8080
 EXPOSE 8081
 

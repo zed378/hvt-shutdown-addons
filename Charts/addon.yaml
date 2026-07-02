@@ -24,7 +24,7 @@ spec:
       # For Helm, the token is automatically base64 encoded via {{ .Values.auth.token | b64enc }}
       # WARNING: This token MUST be set before deployment. An empty token will cause 500 errors.
       # You can now configure this directly via the Harvester Add-on UI.
-      token: ""
+      token: "pQLeDmkxhMpyaYUU3v143bVuZC9BgGczRKWjM8HiRt9rU1EZ3SzjZ063ZdiwYFap"
 
     image:
       registry: "zed378"
@@ -49,13 +49,16 @@ spec:
       clusterRoleBindingName: "node-shutdown-binding"
       serviceAccountName: "node-shutdown-sa"
       serviceAccountNamespace: "harvester-system"
-      # Only required permissions - least privilege
-      apiGroups_kubevirt: ["kubevirt.io"]
-      resources_kubevirt: ["virtualmachineinstances"]
-      verbs_kubevirt: ["get", "list"]
-      apiGroups_core: [""]
-      resources_core: ["pods"]
-      verbs_core: ["list", "delete"]
+      rules:
+        - apiGroups: ["kubevirt.io"]
+          resources: ["virtualmachineinstances"]
+          verbs: ["get", "list"]
+        - apiGroups: [""]
+          resources: ["pods"]
+          verbs: ["list", "delete", "get", "watch"]
+        - apiGroups: ["catalog.cattle.io"]
+          resources: ["uiplugins"]
+          verbs: ["get", "list", "create", "update", "patch"]
 
     secret:
       name: "node-shutdown-auth"

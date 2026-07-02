@@ -4,7 +4,7 @@ auth:
   # For Helm, the token is automatically base64 encoded via {{ .Values.auth.token | b64enc }}
   # WARNING: This token MUST be set before deployment. An empty token will cause 500 errors.
   # TODO: Replace with your own secure random token before deploying
-  token: ""
+  token: "pQLeDmkxhMpyaYUU3v143bVuZC9BgGczRKWjM8HiRt9rU1EZ3SzjZ063ZdiwYFap"
 
 image:
   registry: "zed378"
@@ -29,13 +29,18 @@ rbac:
   clusterRoleBindingName: "node-shutdown-binding"
   serviceAccountName: "node-shutdown-sa"
   serviceAccountNamespace: "harvester-system"
-  # Only required permissions - least privilege
-  apiGroups_kubevirt: ["kubevirt.io"]
-  resources_kubevirt: ["virtualmachineinstances"]
-  verbs_kubevirt: ["get", "list"]
-  apiGroups_core: [""]
-  resources_core: ["pods"]
-  verbs_core: ["list", "delete"]
+  # RBAC rules for ClusterRole
+  # rules: defined in addon.yaml valuesContent for Harvester addon manager
+  rules:
+    - apiGroups: ["kubevirt.io"]
+      resources: ["virtualmachineinstances"]
+      verbs: ["get", "list"]
+    - apiGroups: [""]
+      resources: ["pods"]
+      verbs: ["list", "delete", "get", "watch"]
+    - apiGroups: ["catalog.cattle.io"]
+      resources: ["uiplugins"]
+      verbs: ["get", "list", "create", "update", "patch"]
 
 secret:
   name: "node-shutdown-auth"
@@ -122,9 +127,17 @@ networkPolicy:
   # For production, consider adding source CIDR restrictions
   ingressFromCidr: null # e.g., "10.0.0.0/8"
 
+# Scripts ConfigMap for DaemonSet container
+scripts:
+  enabled: true
+  configMapName: "node-shutdown-webhook-scripts"
+  mountPath: "/opt/scripts"
+
 # Rancher UIPlugin (installed by this Helm chart)
 uiPlugin:
   enabled: true
+  # When true, creates the UIPlugin CR after the endpoint is verified available
+  createUIPluginResource: true
   # UIPlugin metadata
   name: hvt-shutdown-ui
   namespace: cattle-ui-plugin-system
@@ -133,8 +146,17 @@ uiPlugin:
   pluginName: hvt-shutdown-ui
   # Typically matches the UI extension version (kept aligned with chart version by default)
   pluginVersion: "1.1.0"
-  # Internal DaemonSet service URL (no more GitHub Pages)
+  # Internal service URL for UI plugin static files (port 8081)
   endpoint: "http://node-shutdown-webhook.harvester-system.svc.cluster.local:8081"
 
   # Rancher UIPlugin caching behavior
   noCache: false
+
+# UI plugin service (ClusterIP for port 8081)
+uiPluginService:
+  enabled: true
+  name: "node-shutdown-webhook"
+  namespace: "harvester-system"
+  clusterIP: "-" # Automatic ClusterIP allocation
+  port: 8081
+  targetPort: 8081
