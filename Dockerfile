@@ -1,4 +1,6 @@
 # ---- Python runtime with FastAPI ----
+# UI extension static files are served from GitHub Pages, NOT from this image.
+# See: https://zed378.github.io/hvt-shutdown-addons
 FROM python:3.11-slim
 
 WORKDIR /app

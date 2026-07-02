@@ -15,7 +15,7 @@ This service runs as a DaemonSet on each node in a Harvester cluster. It exposes
 - **Helm Chart**: Centralized configuration via `Charts/values.yaml`
 - **Kubevirt Aware**: Gracefully terminates VM workloads before host shutdown with timeout-based fallback
 - **Health Checks**: Liveness, readiness, and Kubernetes connectivity probes
-- **UI Plugin**: Vue.js frontend extension served from GitHub Pages
+- **UI Plugin**: Vue.js frontend extension built into Docker image, served on port 8081
 
 ## Security Features
 
@@ -89,22 +89,13 @@ docker build -t your-registry/hvt-shutdown:latest .
 docker push your-registry/hvt-shutdown:latest
 ```
 
-### 5. Publish UI Extension to GitHub Pages
+The Docker image includes:
 
-```bash
-# Build and publish UI static files to pages branch
-./scripts/publish_ui_to_pages.sh
-```
+- UI extension built from `hvt-shutdown-ui` (built into image)
+- Python FastAPI backend on port 8080
+- UI static files served on port 8081
 
-Or on Windows:
-
-```powershell
-.\scripts\publish_ui_to_pages.ps1
-```
-
-This builds the Vue UI extension and pushes the static files to the `pages` branch, which GitHub Pages serves at `https://zed378.github.io/hvt-shutdown-addons`.
-
-### 6. Package and Publish Helm Chart
+### 5. Package and Publish Helm Chart
 
 Each platform has a dedicated script in the `scripts/` directory:
 
@@ -121,7 +112,7 @@ chmod +x scripts/publish_to_github.sh
 .\scripts\publish_to_github.ps1
 ```
 
-### 7. Update Addon Configuration
+### 6. Update Addon Configuration
 
 Edit `Charts/addon.yaml` and update the repo URL:
 
@@ -130,7 +121,7 @@ spec:
   repo: "https://zed378.github.io/hvt-shutdown-addons/" # Your chart repository URL
 ```
 
-### 8. Install as Harvester Add-on
+### 7. Install as Harvester Add-on
 
 ```bash
 # Apply the Addon CRD
@@ -148,7 +139,7 @@ To configure your Authentication Token:
 2. Click **Edit Config** on the `node-shutdown` addon.
 3. You will see a custom graphical interface! Enter your secure token into the **Authentication Token** field and click Save.
 
-### 9. Access the API via NodePort
+### 8. Access the API via NodePort
 
 After the DaemonSet is running, you can access the API using the chart's NodePort (default **30088**):
 
@@ -171,33 +162,6 @@ curl -X POST http://VIP:30088/system/shutdown \
 ## Architecture
 
 ![Architecture Diagram](architecture.svg)
-
-### UI Plugin Architecture
-
-```
-                    ┌─────────────────────┐
-                    │   GitHub Pages       │
-                    │   (pages branch)     │
-                    │                      │
-                    │  UI Static Files     │
-                    │  (JS, CSS, fonts)    │
-                    └──────────┬───────────┘
-                               │
-                               │ HTTPS
-                               │
-                    ┌──────────▼───────────┐
-                    │   Harvester UI        │
-                    │   (Rancher Shell)     │
-                    └──────────┬───────────┘
-                               │
-                    ┌──────────▼───────────┐
-                    │   UIPlugin CRD        │
-                    │   (cattle-ui-plugin-  │
-                    │    system)            │
-                    └──────────────────────┘
-```
-
-The UI extension is built separately and deployed to GitHub Pages via `publish_ui_to_pages.sh`. The Helm chart references this endpoint in the UIPlugin CRD, which Rancher UI Extensions uses to load the Vue.js frontend.
 
 ## API Endpoints
 
@@ -315,31 +279,12 @@ pytest tests/ -v
 
 All scripts are located in the `scripts/` directory:
 
-| Script                            | Platform             | Description                                |
-| --------------------------------- | -------------------- | ------------------------------------------ |
-| `scripts/publish_ui_to_pages.sh`  | Linux/macOS (bash)   | Build and publish UI to GitHub Pages       |
-| `scripts/publish_ui_to_pages.ps1` | Windows (PowerShell) | Build and publish UI to GitHub Pages       |
-| `scripts/publish_to_github.sh`    | Linux/macOS (bash)   | Publish Helm chart to GitHub Pages as repo |
-| `scripts/publish_to_github.ps1`   | Windows (PowerShell) | Publish Helm chart to GitHub Pages as repo |
-| `scripts/create_release.sh`       | Linux/macOS (bash)   | Interactive GitHub release creator         |
-| `scripts/create_release.ps1`      | Windows (PowerShell) | Windows GitHub release creator             |
-
-### Publishing UI Extension to GitHub Pages
-
-```bash
-# Linux/macOS
-./scripts/publish_ui_to_pages.sh
-
-# Windows
-.\scripts\publish_ui_to_pages.ps1
-```
-
-This script:
-
-1. Installs UI dependencies (if not present)
-2. Builds the Vue UI extension using `yarn build-pkg`
-3. Pushes the built static files to the `pages` branch
-4. GitHub Pages serves the files at `https://<owner>.github.io/<repo>/`
+| Script                          | Platform             | Description                                |
+| ------------------------------- | -------------------- | ------------------------------------------ |
+| `scripts/publish_to_github.sh`  | Linux/macOS (bash)   | Publish Helm chart to GitHub Pages as repo |
+| `scripts/publish_to_github.ps1` | Windows (PowerShell) | Publish Helm chart to GitHub Pages as repo |
+| `scripts/create_release.sh`     | Linux/macOS (bash)   | Interactive GitHub release creator         |
+| `scripts/create_release.ps1`    | Windows (PowerShell) | Windows GitHub release creator             |
 
 ## Troubleshooting
 
@@ -364,14 +309,12 @@ kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/health
 
 ### v1.1.0
 
-- **GitHub Pages UI Deployment**: UI static files are now built and published to GitHub Pages via `publish_ui_to_pages.sh`. No longer baked into Docker image.
-- **Reduced Docker Image Size**: Removed UI build stage from Dockerfile, significantly reducing build time and image size.
-- **Enhanced Architecture Visuals**: Replaced previous architecture diagram with a high-quality SVG vector graphic.
-- **UIPlugin Resource Support**: Added UIPlugin custom resource for proper Rancher UI Extensions integration.
-- **UI Plugin Endpoint**: Changed from internal static file server (port 8081) to GitHub Pages URL for UI plugin serving.
-- **ClusterIP Service for UIPlugin**: Changed from headless service to automatic ClusterIP allocation for reliable UIPlugin endpoint routing.
-- **Cluster-wide Shutdown Coordination**: Added peer-to-peer shutdown via HTTP POST to all DaemonSet pods.
-- **RBAC Enhancements**: Added nodes, events, namespaces, and pods/status permissions for coordinated shutdown.
+- **UI Plugin Built into Docker Image**: UI static files are built during Docker build and served internally on port 8081
+- **UI Plugin Endpoint**: Uses `http://localhost:8081` via hostNetwork for UI serving
+- **UIPlugin Resource Support**: Added UIPlugin custom resource for proper Rancher UI Extensions integration
+- **ClusterIP Service for UIPlugin**: Automatic ClusterIP allocation for reliable UIPlugin endpoint routing
+- **Cluster-wide Shutdown Coordination**: Added peer-to-peer shutdown via HTTP POST to all DaemonSet pods
+- **RBAC Enhancements**: Added nodes, events, namespaces, and pods/status permissions for coordinated shutdown
 
 ## License
 
