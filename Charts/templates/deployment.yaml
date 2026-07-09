@@ -70,6 +70,9 @@ spec:
             httpGet:
               path: {{ .Values.healthCheck.startup.path }}
               port: {{ .Values.healthCheck.startup.port }}
+              {{- if .Values.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
             initialDelaySeconds: {{ .Values.healthCheck.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.startup.periodSeconds }}
             failureThreshold: {{ .Values.healthCheck.startup.failureThreshold }}
@@ -78,6 +81,9 @@ spec:
             httpGet:
               path: {{ .Values.healthCheck.liveness.path }}
               port: {{ .Values.healthCheck.liveness.port }}
+              {{- if .Values.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
             initialDelaySeconds: {{ .Values.healthCheck.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.liveness.periodSeconds }}
             timeoutSeconds: {{ .Values.healthCheck.liveness.timeoutSeconds }}
@@ -86,6 +92,9 @@ spec:
             httpGet:
               path: {{ .Values.healthCheck.readiness.path }}
               port: {{ .Values.healthCheck.readiness.port }}
+              {{- if .Values.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
             initialDelaySeconds: {{ .Values.healthCheck.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.readiness.periodSeconds }}
             timeoutSeconds: {{ .Values.healthCheck.readiness.timeoutSeconds }}
@@ -112,6 +121,20 @@ spec:
               value: "{{ .Values.vmShutdownTimeout }}"
             - name: NODE_PORT
               value: "{{ .Values.nodePort.nodePort }}"
+            - name: LISTEN_PORT
+              value: "{{ .Values.nodePort.targetPort }}"
+            {{- if .Values.tls.enabled }}
+            - name: TLS_ENABLED
+              value: "true"
+            - name: TLS_CERT_PATH
+              value: "{{ .Values.tls.mountPath }}/tls.crt"
+            - name: TLS_KEY_PATH
+              value: "{{ .Values.tls.mountPath }}/tls.key"
+            - name: PEER_TLS_VERIFY
+              value: "{{ .Values.tls.peerVerify }}"
+            - name: PEER_CA_PATH
+              value: "{{ .Values.tls.mountPath }}/tls.crt"
+            {{- end }}
           resources:
 {{ toYaml .Values.resources | nindent 12 }}
           volumeMounts:
@@ -119,6 +142,11 @@ spec:
               mountPath: {{ .Values.hostPath.mountPath }}
             - name: audit-logs
               mountPath: {{ .Values.auditLogging.mountPath }}
+            {{- if .Values.tls.enabled }}
+            - name: tls-certs
+              mountPath: {{ .Values.tls.mountPath }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: {{ .Values.hostPath.name }}
           hostPath:
@@ -126,6 +154,11 @@ spec:
             type: {{ .Values.hostPath.type }}
         - name: audit-logs
           emptyDir: {}
+        {{- if .Values.tls.enabled }}
+        - name: tls-certs
+          secret:
+            secretName: {{ .Values.tls.secretName | default (printf "%s-tls" .Values.daemonset.name) }}
+        {{- end }}
 {{- with .Values.podSecurity.nodeSelector }}
       nodeSelector:
 {{ toYaml . | nindent 8 }}
@@ -154,11 +187,14 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # Allow from any source for NodePort access (auth handles API security)
-    # For production, restrict to specific CIDR or namespaces
-    - ports:
+    - {{- if .Values.networkPolicy.ingressFromCidr }}
+      from:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.ingressFromCidr | quote }}
+      {{- end }}
+      ports:
         - protocol: TCP
-          port: {{ .Values.healthCheck.liveness.port }}
+          port: {{ .Values.nodePort.targetPort }}
 {{- end }}
 ---
 {{- if .Values.nodePort.enabled }}
@@ -183,4 +219,98 @@ spec:
       port: {{ .Values.nodePort.port }}
       targetPort: {{ .Values.nodePort.targetPort }}
       nodePort: {{ .Values.nodePort.nodePort }}
+{{- end }}
+---
+{{- if .Values.uiPlugin.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.uiPlugin.name }}
+  namespace: {{ .Values.uiPlugin.namespace }}
+  labels:
+    app: {{ .Values.uiPlugin.name }}
+spec:
+  replicas: {{ .Values.uiPlugin.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ .Values.uiPlugin.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.uiPlugin.name }}
+    spec:
+      containers:
+        - name: ui
+          image: "{{ .Values.uiPlugin.image.registry }}/{{ .Values.uiPlugin.image.repository }}:{{ .Values.uiPlugin.image.tag }}"
+          imagePullPolicy: {{ .Values.uiPlugin.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 0
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /package.json
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+{{ toYaml .Values.uiPlugin.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.uiPlugin.name }}
+  namespace: {{ .Values.uiPlugin.namespace }}
+  labels:
+    app: {{ .Values.uiPlugin.name }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .Values.uiPlugin.name }}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.uiPlugin.service.port }}
+      targetPort: 8080
+      name: http
+---
+{{- if .Values.uiPlugin.createUIPluginResource }}
+apiVersion: catalog.cattle.io/v1
+kind: UIPlugin
+metadata:
+  name: {{ .Values.uiPlugin.name }}
+  namespace: {{ .Values.uiPlugin.namespace }}
+  labels:
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+spec:
+  plugin:
+    name: {{ .Values.uiPlugin.name }}
+    version: {{ .Values.uiPlugin.pluginVersion | quote }}
+    endpoint: {{ .Values.uiPlugin.endpoint | quote }}
+    noCache: {{ .Values.uiPlugin.noCache }}
+{{- end }}
 {{- end }}

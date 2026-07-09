@@ -1,10 +1,13 @@
 auth:
-  # IMPORTANT: Generate a strong, random token before deployment:
+  # IMPORTANT: Set a strong, random token before deployment:
   #   openssl rand -hex 32
-  # For Helm, the token is automatically base64 encoded via {{ .Values.auth.token | b64enc }}
-  # WARNING: This token MUST be set before deployment. An empty token will cause 500 errors.
-  # TODO: Replace with your own secure random token before deploying
-  token: "pQLeDmkxhMpyaYUU3v143bVuZC9BgGczRKWjM8HiRt9rU1EZ3SzjZ063ZdiwYFap"
+  # Provide it here, or (preferred) via the Harvester Add-on UI token field.
+  # The chart base64-encodes this value into the Secret automatically.
+  #
+  # Fail-closed behavior: if left empty, the chart generates a strong random
+  # token at install time (read it from the "node-shutdown-auth" Secret). The
+  # service always requires a valid Bearer token. Do NOT commit a real token.
+  token: ""
 
 image:
   registry: "zed378"
@@ -30,21 +33,20 @@ rbac:
   clusterRoleBindingName: "node-shutdown-binding"
   serviceAccountName: "node-shutdown-sa"
   serviceAccountNamespace: "harvester-system"
-  # RBAC rules for ClusterRole
-  # rules: defined in addon.yaml valuesContent for Harvester addon manager
+  # RBAC rules for ClusterRole (least privilege).
+  # The service only needs to: read VM instances (informational), and
+  # list/get/delete pods (to enumerate peer pods and gracefully delete
+  # virt-launcher pods on the node it is powering off).
+  # Removed vs. earlier versions: delete on nodes/namespaces/events
+  # (dangerous and unused), pods/status patch (unused), and uiplugins
+  # write access (the UIPlugin CR is created by the Helm release, not the app).
   rules:
     - apiGroups: ["kubevirt.io"]
       resources: ["virtualmachineinstances"]
       verbs: ["get", "list", "watch"]
     - apiGroups: [""]
-      resources: ["pods", "nodes", "events", "namespaces"]
-      verbs: ["list", "delete", "get", "watch"]
-    - apiGroups: [""]
-      resources: ["pods/status"]
-      verbs: ["patch", "get"]
-    - apiGroups: ["catalog.cattle.io"]
-      resources: ["uiplugins"]
-      verbs: ["get", "list", "create", "update", "patch"]
+      resources: ["pods"]
+      verbs: ["get", "list", "delete"]
 
 secret:
   name: "node-shutdown-auth"
@@ -81,6 +83,24 @@ hostPath:
   mountPath: "/host"
   path: "/"
   type: "Directory"
+
+# TLS for the shutdown API and peer-to-peer coordination calls.
+# When enabled, the service serves HTTPS on the container port and all peer
+# calls use HTTPS. Health probes automatically switch to the HTTPS scheme.
+tls:
+  enabled: false
+  # Provide your own cert by setting an existing TLS secret name (keys tls.crt /
+  # tls.key). Leave empty to have the chart generate a self-signed cert.
+  secretName: ""
+  # Where the cert/key are mounted inside the container.
+  mountPath: "/etc/tls"
+  # Validity (days) and CN for the chart-generated self-signed certificate.
+  selfSigned:
+    days: 3650
+    commonName: "node-shutdown-webhook"
+  # Verify peer certificates during cluster coordination. With self-signed
+  # per-node certs this should stay false (the bearer token is the real control).
+  peerVerify: false
 
 # Security hardening
 podSecurity:
@@ -135,11 +155,15 @@ nodePort:
 # Max time to wait for VMs to fully shut down before baremetal poweroff (seconds)
 vmShutdownTimeout: 120
 
-# Network policy (optional - restricts incoming traffic)
+# Network policy (optional - restricts incoming traffic to the API port).
+# IMPORTANT: this DaemonSet uses hostNetwork: true. Kubernetes NetworkPolicy
+# generally does NOT apply to hostNetwork pods (traffic to the node IP bypasses
+# the CNI), so the authoritative control for restricting NodePort access is a
+# HOST FIREWALL rule on the node (e.g. allow 30088 only from your management
+# subnet). The policy below is defense-in-depth for CNIs that do enforce it.
 networkPolicy:
   enabled: false
-  # When enabled, only allows ingress on the health check port
-  # For production, consider adding source CIDR restrictions
+  # When set, only allows ingress from this source CIDR on the API port.
   ingressFromCidr: null # e.g., "10.0.0.0/8"
 
 # Scripts ConfigMap for DaemonSet container
@@ -149,8 +173,7 @@ scripts:
   mountPath: "/opt/scripts"
 
 # Rancher UIPlugin (installed by this Helm chart)
-# UI static files are published to GitHub Pages and served at:
-# https://zed378.github.io/hvt-shutdown-addons
+# UI static files are served from a separate in-cluster container image (nginx).
 uiPlugin:
   enabled: true
   # When true, creates the UIPlugin CR after the endpoint is verified available
@@ -159,12 +182,35 @@ uiPlugin:
   name: hvt-shutdown-ui
   namespace: cattle-ui-plugin-system
 
+  # UI container image (separate from the API image)
+  image:
+    registry: "zed378"
+    repository: "hvt-shutdown-ui"
+    tag: "latest"
+    pullPolicy: "IfNotPresent"
+
   # UIPlugin spec
   pluginName: hvt-shutdown-ui
   # Typically matches the UI extension version (kept aligned with chart version by default)
-  pluginVersion: "1.1.0"
-  # UI plugin endpoint - served via GitHub Pages (publish_ui_to_pages.sh must run first)
-  endpoint: "https://zed378.github.io/hvt-shutdown-addons"
+  pluginVersion: "1.2.0"
+  # UI plugin endpoint - served from the in-cluster ClusterIP service
+  endpoint: "http://hvt-shutdown-ui.cattle-ui-plugin-system.svc:80"
 
   # Rancher UIPlugin caching behavior
   noCache: false
+
+  # ClusterIP service configuration
+  service:
+    port: 80
+
+  # Number of replicas for the UI deployment
+  replicas: 1
+
+  # Resource limits for the UI container
+  resources:
+    limits:
+      cpu: "100m"
+      memory: "64Mi"
+    requests:
+      cpu: "50m"
+      memory: "32Mi"

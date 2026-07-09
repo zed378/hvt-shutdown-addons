@@ -1,22 +1,19 @@
 #!/bin/bash
-# Script to publish Helm chart and UI extension to GitHub Pages
+# Script to publish Helm chart to GitHub Pages
 # Usage: ./scripts/publish_to_github.sh
 #
 # Flow:
 #   1. Generate Helm tarball and index.yaml
-#   2. Generate UI plugin static files (yarn build-pkg)
-#   3. Push tarball + index to 'pages' branch
-#   4. Push UI static files to 'pages' branch
+#   2. Push tarball + index to 'pages' branch
 #
-# GitHub Pages serves both at:
+# GitHub Pages serves the Helm chart repository at:
 #   https://zed378.github.io/hvt-shutdown-addons
 #
-# For automated publishing on every push to main, see:
-#   .github/workflows/publish-pages.yml
+# The UI plugin is now served from a separate Docker image (see Dockerfile.ui),
+# NOT from GitHub Pages.
 #
 # Requirements:
 #   - GitHub CLI (gh) authenticated: gh auth login
-#   - Node.js 24+ with yarn installed
 #   - Helm installed
 #   - Git configured with remote origin
 #
@@ -33,13 +30,11 @@ OWNER="zed378"
 REPO_NAME="hvt-shutdown-addons"
 GITHUB_REPO="https://github.com/${OWNER}/${REPO_NAME}.git"
 BRANCH="pages"
-UI_DIR="hvt-shutdown-ui"
 HELM_REPO_URL="https://${OWNER}.github.io/${REPO_NAME}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR/.."
 CHART_DIR="$PROJECT_ROOT/Charts"
-UI_SRC_DIR="$PROJECT_ROOT/$UI_DIR"
 
 CHART_VERSION=$(grep '^version:' "$CHART_DIR/Chart.yaml" | awk '{print $2}' | tr -d '"')
 CHART_NAME=$(grep '^name:'    "$CHART_DIR/Chart.yaml" | awk '{print $2}' | tr -d '"')
@@ -55,16 +50,12 @@ echo "Chart:       ${CHART_NAME} v${CHART_VERSION}"
 echo ""
 
 # ── Prerequisites ──────────────────────────────────────────────────────
-for cmd in gh helm node yarn git; do
+for cmd in gh helm git; do
     if ! command -v "$cmd" &> /dev/null; then
         echo "Error: '$cmd' is not installed."
         exit 1
     fi
 done
-
-echo "Node:  $(node --version)"
-echo "Yarn:  $(yarn --version)"
-echo ""
 
 if ! gh auth status &> /dev/null; then
     echo "Error: GitHub CLI is not authenticated. Run 'gh auth login' first."
@@ -81,7 +72,7 @@ echo "Git remote: $remoteUrl"
 echo ""
 
 # ── Step 1: Generate Helm tarball and index.yaml ───────────────────────
-echo "=== [1/4] Generating Helm tarball and index.yaml ==="
+echo "=== [1/2] Generating Helm tarball and index.yaml ==="
 
 # Copy scripts into Charts/scripts/ for ConfigMap inclusion
 mkdir -p "$CHART_DIR/scripts"
@@ -109,39 +100,8 @@ echo "=== index.yaml ==="
 cat "$INDEX_YAML_FILE"
 echo ""
 
-# ── Step 2: Generate UI plugin static files ────────────────────────────
-echo "=== [2/4] Generating UI plugin static files ==="
-cd "$UI_SRC_DIR"
-
-if [ ! -d "node_modules" ]; then
-    echo "Installing UI dependencies..."
-    yarn install --immutable 2>/dev/null || npm install
-fi
-
-yarn build-pkg "$UI_DIR" true
-
-DIST_PKG_DIR="$UI_SRC_DIR/dist-pkg"
-if [ ! -d "$DIST_PKG_DIR" ]; then
-    echo "Error: Build output not found at $DIST_PKG_DIR"
-    exit 1
-fi
-
-UI_VERSION_DIR=$(ls -d "$DIST_PKG_DIR"/hvt-shutdown-ui-* 2>/dev/null | head -1)
-if [ -z "$UI_VERSION_DIR" ] || [ ! -d "$UI_VERSION_DIR" ]; then
-    echo "Error: No versioned build directory found in $DIST_PKG_DIR"
-    ls -la "$DIST_PKG_DIR"
-    exit 1
-fi
-
-UI_VERSION=$(basename "$UI_VERSION_DIR" | sed 's/hvt-shutdown-ui-//')
-echo "UI version: $UI_VERSION"
-echo "Output:     $UI_VERSION_DIR"
-echo ""
-
-cd "$PROJECT_ROOT"
-
-# ── Step 3: Push tarball + index to pages branch ───────────────────────
-echo "=== [3/4] Pushing tarball and index to '$BRANCH' branch ==="
+# ── Step 2: Push tarball + index to pages branch ───────────────────────
+echo "=== [2/2] Pushing tarball and index to '$BRANCH' branch ==="
 TEMP_DIR=$(mktemp -d)
 PAGES_DIR="$TEMP_DIR/pages"
 
@@ -164,23 +124,6 @@ git commit -m "Publish ${CHART_NAME} v${CHART_VERSION}" --allow-empty \
     || echo "Nothing to commit."
 git push origin "$BRANCH"
 echo "Pushed: $CHART_FILENAME + index.yaml"
-echo ""
-
-# ── Step 4: Push UI static files to pages branch ──────────────────────
-echo "=== [4/4] Pushing UI static files to '$BRANCH' branch ==="
-
-# Pull latest after the helm push to avoid conflicts
-git pull origin "$BRANCH"
-
-rm -rf "$PAGES_DIR/hvt-shutdown-ui-$UI_VERSION"
-cp -r "$UI_VERSION_DIR" "$PAGES_DIR/"
-cp "$UI_VERSION_DIR/package.json" "$PAGES_DIR/package.json"
-
-git add "hvt-shutdown-ui-$UI_VERSION" package.json
-git commit -m "Publish UI v${UI_VERSION}" --allow-empty \
-    || echo "Nothing to commit."
-git push origin "$BRANCH"
-echo "Pushed: hvt-shutdown-ui-$UI_VERSION/ + package.json"
 
 cd "$PROJECT_ROOT"
 
@@ -195,10 +138,10 @@ rm -rf "$TEMP_DIR"
 echo ""
 echo "=== Published successfully ==="
 echo ""
-echo "Helm index:   https://${OWNER}.github.io/${REPO_NAME}/index.yaml"
-echo "Helm chart:   https://${OWNER}.github.io/${REPO_NAME}/${CHART_FILENAME}"
-echo "UIPlugin URL: https://${OWNER}.github.io/${REPO_NAME}"
-echo "UI plugin:    https://${OWNER}.github.io/${REPO_NAME}/hvt-shutdown-ui-${UI_VERSION}/package/index.html"
+echo "Helm index:  https://${OWNER}.github.io/${REPO_NAME}/index.yaml"
+echo "Helm chart:  https://${OWNER}.github.io/${REPO_NAME}/${CHART_FILENAME}"
+echo ""
+echo "Note: UI plugin is served from Docker image (zed378/hvt-shutdown-ui), not GitHub Pages."
 echo ""
 echo "To add the Helm repo:"
 echo "  helm repo add hvt-shutdown ${HELM_REPO_URL}"

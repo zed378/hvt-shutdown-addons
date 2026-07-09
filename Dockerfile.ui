@@ -1,0 +1,73 @@
+# ---- Stage 1: Build UI plugin static files ----
+FROM node:24-slim AS builder
+
+WORKDIR /build
+
+# Copy UI plugin source
+COPY hvt-shutdown-ui/ ./
+
+# Install dependencies and build the UI extension package
+# Remove .yarnrc frozen-lockfile constraint (lockfile may differ across platforms)
+RUN rm -f .yarnrc && \
+    yarn install && \
+    yarn build-pkg hvt-shutdown-ui true
+
+# ---- Stage 2: Serve static files with nginx ----
+FROM nginx:1.27-alpine
+
+# Remove default nginx config and html
+RUN rm -rf /etc/nginx/conf.d/default.conf /usr/share/nginx/html/*
+
+# Copy custom nginx configuration
+COPY <<'NGINX_CONF' /etc/nginx/conf.d/default.conf
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index package.json;
+
+    # Serve static files with caching.
+    # NOTE: wildcard CORS is required so the Rancher/Harvester dashboard can load
+    # this extension bundle cross-origin from the UIPlugin endpoint.
+    location / {
+        try_files $uri $uri/ =404;
+        add_header Access-Control-Allow-Origin *;
+        add_header X-Content-Type-Options "nosniff";
+        add_header Cache-Control "public, max-age=3600";
+    }
+
+    # Health check endpoint
+    location /healthz {
+        access_log off;
+        return 200 '{"status":"ok"}';
+        add_header Content-Type application/json;
+    }
+}
+NGINX_CONF
+
+# Copy the built version directory contents to nginx html root
+COPY --from=builder /build/dist-pkg/ /usr/share/nginx/html/
+
+# Copy package.json from the versioned folder to the root so it is served at /package.json
+RUN cd /usr/share/nginx/html && \
+    VERSION_DIR=$(ls -d hvt-shutdown-ui-*/ 2>/dev/null | head -1) && \
+    if [ -n "$VERSION_DIR" ]; then \
+        cp "${VERSION_DIR}package.json" ./package.json && \
+        echo "Serving UI version directory: $VERSION_DIR"; \
+    else \
+        echo "ERROR: No versioned directory found"; exit 1; \
+    fi
+
+EXPOSE 8080
+
+# Run nginx as non-root
+RUN chown -R nginx:nginx /usr/share/nginx/html && \
+    chown -R nginx:nginx /var/cache/nginx && \
+    chown -R nginx:nginx /var/log/nginx && \
+    touch /var/run/nginx.pid && \
+    chown nginx:nginx /var/run/nginx.pid
+
+USER 101
+
+CMD ["nginx", "-g", "daemon off;"]

@@ -12,19 +12,20 @@ spec:
   # Helm chart repository URL
   repo: "https://zed378.github.io/hvt-shutdown-addons/"
   # Chart version
-  version: "1.1.0"
+  version: "1.2.0"
   # Chart name (must match chart.yaml name)
   chart: node-shutdown
   # Values to pass to the Helm chart - will be merged with chart's values.yaml
   # IMPORTANT: This only passes values, the chart itself must be in the repository
   valuesContent: |-
     auth:
-      # IMPORTANT: Generate a strong, random token before deployment:
+      # IMPORTANT: Set a strong, random token before deployment:
       #   openssl rand -hex 32
-      # For Helm, the token is automatically base64 encoded via {{ .Values.auth.token | b64enc }}
-      # WARNING: This token MUST be set before deployment. An empty token will cause 500 errors.
-      # You can now configure this directly via the Harvester Add-on UI.
-      token: "pQLeDmkxhMpyaYUU3v143bVuZC9BgGczRKWjM8HiRt9rU1EZ3SzjZ063ZdiwYFap"
+      # Configure this directly via the Harvester Add-on UI (recommended), or set
+      # it here. The chart base64-encodes this value into the Secret automatically.
+      # Fail-closed: if left empty, a strong random token is generated at install
+      # time (read it from the "node-shutdown-auth" Secret). Do NOT commit a real token.
+      token: ""
 
     image:
       registry: "zed378"
@@ -50,19 +51,22 @@ spec:
       clusterRoleBindingName: "node-shutdown-binding"
       serviceAccountName: "node-shutdown-sa"
       serviceAccountNamespace: "harvester-system"
+      # Least-privilege: only read VMIs and list/get/delete pods.
       rules:
         - apiGroups: ["kubevirt.io"]
           resources: ["virtualmachineinstances"]
           verbs: ["get", "list", "watch"]
         - apiGroups: [""]
-          resources: ["pods", "nodes", "events", "namespaces"]
-          verbs: ["list", "delete", "get", "watch"]
-        - apiGroups: [""]
-          resources: ["pods/status"]
-          verbs: ["patch", "get"]
-        - apiGroups: ["catalog.cattle.io"]
-          resources: ["uiplugins"]
-          verbs: ["get", "list", "create", "update", "patch"]
+          resources: ["pods"]
+          verbs: ["get", "list", "delete"]
+
+    secret:
+      name: "node-shutdown-auth"
+      namespace: "harvester-system"
+      type: "Opaque"
+      key: "auth-token"
+
+    gracePeriodSeconds: 10
 
     healthCheck:
       startup:
@@ -87,25 +91,27 @@ spec:
         timeoutSeconds: 5
         failureThreshold: 3
 
-    secret:
-      name: "node-shutdown-auth"
-      namespace: "harvester-system"
-      type: "Opaque"
-      key: "auth-token"
-
-
     hostPath:
       name: "host-root"
       mountPath: "/host"
       path: "/"
       type: "Directory"
 
+    # TLS for the shutdown API and peer-to-peer coordination calls.
+    tls:
+      enabled: false
+      secretName: ""
+      mountPath: "/etc/tls"
+      selfSigned:
+        days: 3650
+        commonName: "node-shutdown-webhook"
+      peerVerify: false
+
     # Security hardening
     podSecurity:
-      # Pod security standards - restrict privileged access
-      runAsNonRoot: false # Node shutdown requires root for systemctl
-      readOnlyRootFilesystem: false # Need to write logs
-      allowPrivilegeEscalation: true # Required when privileged: true
+      runAsNonRoot: false
+      readOnlyRootFilesystem: false
+      allowPrivilegeEscalation: true
       drop_capabilities:
         - ALL
       nodeSelector: {}
@@ -141,35 +147,51 @@ spec:
     # NodePort service configuration
     nodePort:
       enabled: true
-      # Port to expose the service (default: 30088)
       port: 30088
-      # Target port (container port)
       targetPort: 8080
-      # Node port range (30000-32767)
       nodePort: 30088
-      # Routing policy (Local = traffic routed strictly to local node's pod)
       externalTrafficPolicy: Local
 
     # Max time to wait for VMs to fully shut down before baremetal poweroff (seconds)
     vmShutdownTimeout: 120
 
-    # Network policy (optional - restricts incoming traffic)
+    # Network policy (optional). NOTE: hostNetwork pods largely bypass
+    # NetworkPolicy — use a host firewall on the node to restrict NodePort 30088.
     networkPolicy:
       enabled: false
-      # When enabled, only allows ingress on the health check port
-      # For production, consider adding source CIDR restrictions
-      ingressFromCidr: null # e.g., "10.0.0.0/8"
+      ingressFromCidr: null # e.g. "10.0.0.0/8"
+
+    # Scripts ConfigMap for DaemonSet container
+    scripts:
+      enabled: true
+      configMapName: "node-shutdown-webhook-scripts"
+      mountPath: "/opt/scripts"
 
     # Rancher UIPlugin configuration
-    # UI static files are published to GitHub Pages and served at:
-    # https://zed378.github.io/hvt-shutdown-addons
+    # UI static files are served from a separate in-cluster container image (nginx).
     uiPlugin:
       enabled: true
       createUIPluginResource: true
       name: hvt-shutdown-ui
       namespace: cattle-ui-plugin-system
+      image:
+        registry: "zed378"
+        repository: "hvt-shutdown-ui"
+        tag: "latest"
+        pullPolicy: "Always"
       pluginName: hvt-shutdown-ui
-      pluginVersion: "1.1.0"
-      # UI plugin endpoint - served via GitHub Pages (publish_ui_to_pages.sh must run first)
-      endpoint: "https://zed378.github.io/hvt-shutdown-addons"
+      pluginVersion: "1.2.0"
+      endpoint: "http://hvt-shutdown-ui.cattle-ui-plugin-system.svc:80"
       noCache: false
+      service:
+        port: 80
+      replicas: 1
+      resources:
+        limits:
+          cpu: "100m"
+          memory: "64Mi"
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+
+

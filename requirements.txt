@@ -1,5 +1,7 @@
-fastapi>=0.100.0
-uvicorn>=0.22.0
-kubernetes>=26.1.0
-python-multipart>=0.0.6
-python-dateutil>=2.8.0
+# Pinned with upper bounds to prevent surprise breaking major upgrades while
+# still allowing security patch releases. Only the packages actually imported
+# by the service are listed (python-multipart / python-dateutil were unused and
+# have been dropped to reduce the dependency/attack surface).
+fastapi>=0.110.0,<1.0.0
+uvicorn[standard]>=0.29.0,<1.0.0
+kubernetes>=29.0.0,<32.0.0

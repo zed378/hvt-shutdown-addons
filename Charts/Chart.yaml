@@ -2,8 +2,8 @@ apiVersion: v2
 name: node-shutdown
 description: Secure node shutdown service for Harvester clusters
 type: application
-version: 1.1.0
-appVersion: "1.1.0"
+version: 1.2.0
+appVersion: "1.2.0"
 keywords:
   - harvester
   - shutdown

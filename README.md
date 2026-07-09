@@ -23,12 +23,23 @@ This service runs as a DaemonSet on each node in a Harvester cluster. It exposes
 
 - **Bearer Token Authentication**: All shutdown requests require a strong Bearer token via `AUTH_TOKEN` environment variable
 - **Constant-time Comparison**: Uses `secrets.compare_digest()` to prevent timing attacks
-- **Empty Token Protection**: Returns 500 if `AUTH_TOKEN` is not configured
+- **No Credential Leakage**: Failed attempts are logged without echoing any token material
+- **Consistent 401**: Both missing and invalid tokens return `401` (never a partial-info `403`)
+- **Fail-closed Default**: `auth.token` ships empty. If left empty the chart generates a strong random token at install time (readable from the `node-shutdown-auth` Secret); the known default token that previously shipped is now actively rejected at install time
 
 ### Rate Limiting
 
-- **Sliding Window Algorithm**: Configurable requests per minute (default: 10)
-- **Returns HTTP 429**: When rate limit is exceeded
+- **Per-Client Sliding Window**: Configurable requests per minute (default: 10), keyed per client IP
+- **Applied After Authentication**: Enforced only for authenticated requests, so unauthenticated or failed traffic can never throttle a real emergency (UPS-triggered) shutdown
+- **Returns HTTP 429**: When a client exceeds its own budget
+
+### API Surface Reduction
+
+- **Docs Disabled by Default**: `/docs`, `/redoc`, and `/openapi.json` are disabled unless `ENABLE_DOCS=true`, avoiding disclosure of the privileged API surface
+
+### Least-Privilege RBAC
+
+- **Pods-Only Access**: The service account can only read VM instances and `get`/`list`/`delete` pods. It can no longer delete nodes/namespaces/events, patch pod status, or write UIPlugin resources (the UIPlugin CR is created by the Helm release itself)
 
 ### Concurrent Shutdown Protection
 
@@ -248,7 +259,7 @@ All values are in `Charts/values.yaml`:
 
 | Variable                            | Description                               | Default        |
 | ----------------------------------- | ----------------------------------------- | -------------- |
-| `auth.token`                        | Bearer token for API authentication       | **(required)** |
+| `auth.token`                        | Bearer token for API authentication (set via UI or here; empty = auto-generated random token, fails closed) | `""` |
 | `image.registry`                    | Docker image registry                     | zed378         |
 | `image.repository`                  | Docker image name                         | hvt-shutdown   |
 | `image.tag`                         | Docker image tag                          | latest         |
@@ -257,16 +268,57 @@ All values are in `Charts/values.yaml`:
 | `rateLimiting.maxRequestsPerMinute` | Rate limit threshold                      | 10             |
 | `auditLogging.enabled`              | Enable audit logging                      | true           |
 | `networkPolicy.enabled`             | Enable Kubernetes NetworkPolicy           | false          |
+| `networkPolicy.ingressFromCidr`     | Restrict API ingress to this source CIDR  | null           |
+| `tls.enabled`                       | Serve the API over HTTPS (and use HTTPS for peer calls) | false |
+| `tls.secretName`                    | Existing TLS secret (`tls.crt`/`tls.key`); empty = chart self-signs | "" |
+| `tls.peerVerify`                    | Verify peer certificates during coordination | false      |
 | `uiPlugin.createUIPluginResource`   | Auto-create UIPlugin after endpoint ready | true           |
+
+Environment-only knobs (not Helm values): `ENABLE_DOCS` (default `false`) re-enables `/docs` and `/openapi.json`.
+
+## Transport Security (TLS)
+
+By default the API is served over plain HTTP on the NodePort. To encrypt the API
+and all peer-to-peer coordination traffic (the bearer token is otherwise sent in
+clear text), enable TLS:
+
+```yaml
+tls:
+  enabled: true
+  # Leave secretName empty to let the chart generate a self-signed cert, or
+  # point at an existing kubernetes.io/tls secret (e.g. from cert-manager).
+  secretName: ""
+  peerVerify: false   # self-signed per-node certs => leave false; token still enforced
+```
+
+When enabled, the health probes automatically switch to the `HTTPS` scheme, the
+cert/key are mounted read-only at `/etc/tls`, and clients must use `https://VIP:30088`.
+For a publicly trusted cert, front the NodePort with an ingress/load-balancer that
+terminates TLS instead.
+
+## Restricting Access (NetworkPolicy & firewall)
+
+> **Important:** this DaemonSet runs with `hostNetwork: true`. Kubernetes
+> NetworkPolicy generally does **not** apply to hostNetwork pods, so the
+> authoritative control is a **host firewall** rule on each node (allow TCP
+> `30088` only from your management subnet). The chart's NetworkPolicy is
+> defense-in-depth for CNIs that enforce it:
+
+```yaml
+networkPolicy:
+  enabled: true
+  ingressFromCidr: "10.0.0.0/8"   # only this source range may reach the API port
+```
 
 ## Security Best Practices
 
 1. **Generate Strong Tokens**: Always use `openssl rand -hex 32` or similar for auth tokens
-2. **Enable NetworkPolicy**: Set `networkPolicy.enabled: true` to restrict access
-3. **Restrict NodePort**: Use firewall rules to limit access to NodePort range
-4. **Monitor Audit Logs**: Regularly review `/var/log/shutdown-audit.log`
-5. **Rotate Tokens**: Periodically change `AUTH_TOKEN` and update the Kubernetes secret
-6. **Use TLS**: Deploy with an ingress controller that provides TLS termination
+2. **Restrict at the Host Firewall**: Limit NodePort `30088` to your management subnet (authoritative for hostNetwork)
+3. **Enable NetworkPolicy** where your CNI enforces it: `networkPolicy.enabled: true` + `ingressFromCidr`
+4. **Enable TLS**: Set `tls.enabled: true`, or terminate TLS at an ingress/load-balancer
+5. **Monitor Audit Logs**: Regularly review `/var/log/shutdown-audit.log`
+6. **Rotate Tokens**: Periodically change the token (via the Add-on UI) — it updates the Kubernetes secret
+7. **Keep Docs Disabled**: Leave `ENABLE_DOCS=false` in production
 
 ## Testing
 
@@ -306,6 +358,20 @@ kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/health
 ```
 
 ## Changelog
+
+### v1.2.0 — Security hardening
+
+- **Fixed dead default-token guard**: the Helm pre-install check compared `auth.token` against a base64 string that never matched the plaintext token it shipped, so a publicly known default token installed silently. The guard now compares the correct plaintext value and fails the install if it is used.
+- **Removed committed token**: `values.yaml` and `addon.yaml` no longer ship a real token; `auth.token` defaults to empty and fails closed (auto-generated random token).
+- **Rate limiting moved after authentication and made per-IP**: failed/unauthenticated requests can no longer consume the shutdown budget and lock out an emergency shutdown.
+- **No credential leakage in logs**; missing tokens now return a consistent `401`.
+- **Least-privilege RBAC**: dropped `delete` on nodes/namespaces/events, unused `pods/status` patch, and `uiplugins` write access.
+- **API docs disabled by default** (`ENABLE_DOCS=true` to re-enable).
+- **Dependencies pinned** with upper bounds; unused `python-multipart`/`python-dateutil` removed. Dockerfile hygiene improvements.
+- **Optional TLS**: `tls.enabled: true` serves the API over HTTPS and encrypts peer-to-peer coordination calls; chart self-signs or accepts a bring-your-own secret; probes switch to the HTTPS scheme automatically.
+- **NetworkPolicy source-CIDR restriction** wired in via `networkPolicy.ingressFromCidr` (with a documented hostNetwork caveat).
+- **UI token field hardened**: autocomplete disabled, weak-token warning, and a note that add-on read access exposes the token.
+- **Tests repaired and expanded** to match current behavior, with global state reset between tests.
 
 ### v1.1.0
 

@@ -39,6 +39,10 @@ if _audit_log_dir and not os.path.exists(_audit_log_dir):
 MAX_REQUESTS_PER_MINUTE = int(os.getenv("MAX_REQUESTS_PER_MINUTE", "10"))
 RATE_LIMIT_WINDOW = 60  # seconds
 
+# Expose interactive API docs (/docs, /openapi.json) only when explicitly enabled.
+# Disabled by default to reduce information disclosure on a security-sensitive service.
+ENABLE_DOCS = os.getenv("ENABLE_DOCS", "false").lower() == "true"
+
 # Concurrent shutdown protection - use Lock for atomic check-and-set
 _shutdown_lock = Lock()
 _shutdown_in_progress = False
@@ -50,6 +54,42 @@ k8s_core = None
 NODE_NAME = os.getenv("NODE_NAME")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 NODE_PORT = int(os.getenv("NODE_PORT", "30088"))
+
+# Port this service listens on inside the pod.
+LISTEN_PORT = int(os.getenv("LISTEN_PORT", "8080"))
+
+# --- TLS configuration ---
+# When TLS_ENABLED=true and a cert/key are present, the service serves HTTPS and
+# all peer-to-peer coordination calls are made over HTTPS as well. Certs are
+# provisioned by the Helm chart (self-signed by default, or bring-your-own).
+TLS_ENABLED = os.getenv("TLS_ENABLED", "false").lower() == "true"
+TLS_CERT_PATH = os.getenv("TLS_CERT_PATH", "/etc/tls/tls.crt")
+TLS_KEY_PATH = os.getenv("TLS_KEY_PATH", "/etc/tls/tls.key")
+# Optional CA bundle used to verify peers. If PEER_TLS_VERIFY=false (default),
+# peer certificates are NOT verified — acceptable for intra-cluster, self-signed
+# certs because every call is still gated by the shared bearer token.
+PEER_TLS_VERIFY = os.getenv("PEER_TLS_VERIFY", "false").lower() == "true"
+PEER_CA_PATH = os.getenv("PEER_CA_PATH", TLS_CERT_PATH)
+
+# Scheme used when this node talks to peer nodes.
+PEER_SCHEME = "https" if TLS_ENABLED else "http"
+
+
+def _peer_ssl_context():
+    """Build an SSL context for outbound peer calls, or None for plain HTTP."""
+    if PEER_SCHEME != "https":
+        return None
+    import ssl
+    if PEER_TLS_VERIFY:
+        try:
+            return ssl.create_default_context(cafile=PEER_CA_PATH)
+        except Exception:
+            return ssl.create_default_context()
+    # Intra-cluster self-signed certs: skip verification (token still enforced).
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 
 # Configure logging
@@ -83,30 +123,57 @@ signal.signal(signal.SIGINT, handle_signal)
 
 # Rate limiter
 class RateLimiter:
-    """Thread-safe rate limiter using sliding window algorithm."""
+    """Thread-safe per-client sliding-window rate limiter.
+
+    Requests are tracked per key (typically the client IP) so that traffic
+    from one source cannot exhaust the shutdown budget for every other
+    source. Rate limiting is intentionally applied *after* authentication
+    (see the shutdown endpoint) so that unauthenticated or failed requests
+    can never throttle a legitimate, emergency UPS-triggered shutdown.
+    """
     def __init__(self, max_requests: int, window: int):
         self.max_requests = max_requests
         self.window = window
-        self.requests = []
+        self.buckets: dict[str, list[float]] = {}
         self.lock = Lock()
 
-    def is_allowed(self) -> bool:
-        """Check if request is allowed under rate limit."""
+    def is_allowed(self, key: str = "global") -> bool:
+        """Check if a request from ``key`` is allowed under the rate limit."""
         with self.lock:
             now = time.time()
-            # Remove requests outside the current window
-            self.requests = [r for r in self.requests if now - r < self.window]
-            if len(self.requests) >= self.max_requests:
+            # Drop timestamps outside the current window for this key
+            recent = [r for r in self.buckets.get(key, []) if now - r < self.window]
+            if len(recent) >= self.max_requests:
+                self.buckets[key] = recent
                 return False
-            self.requests.append(now)
+            recent.append(now)
+            self.buckets[key] = recent
+            # Opportunistically evict fully-expired buckets to bound memory
+            if len(self.buckets) > 1024:
+                self.buckets = {
+                    k: v for k, v in self.buckets.items()
+                    if v and now - v[-1] < self.window
+                }
             return True
 
 
 rate_limiter = RateLimiter(MAX_REQUESTS_PER_MINUTE, RATE_LIMIT_WINDOW)
 
-security = HTTPBearer()
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP, honoring common reverse-proxy headers."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else "unknown"
 
 
+# auto_error=False so a *missing* Authorization header is handled by
+# verify_token and returns a consistent 401 (rather than Starlette's 403).
+security = HTTPBearer(auto_error=False)
 
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -117,8 +184,10 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication service misconfigured",
         )
-    if not secrets.compare_digest(credentials.credentials, AUTH_TOKEN):
-        logger.warning("Failed authentication attempt from %s", credentials.credentials[:8] if credentials.credentials else "none")
+    # Never log or echo credential material. Compare in constant time.
+    presented = credentials.credentials if credentials else ""
+    if not secrets.compare_digest(presented, AUTH_TOKEN):
+        logger.warning("Failed authentication attempt (invalid or missing token)")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing authentication token",
@@ -166,9 +235,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Node Shutdown API",
     description="Secure node shutdown service for Harvester clusters",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan,
+    # Interactive docs and the OpenAPI schema are disabled unless ENABLE_DOCS=true,
+    # to avoid disclosing the API surface of a privileged shutdown service.
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url="/redoc" if ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None,
 )
+
+# Tracks fire-and-forget background coordination tasks so they are not
+# garbage-collected before completion.
+_background_tasks: set = set()
 
 
 @app.exception_handler(HTTPException)
@@ -202,20 +280,10 @@ async def audit_middleware(request: Request, call_next):
     return response
 
 
-@app.middleware("http")
-async def rate_limit_middleware(request: Request, call_next):
-    """Rate limiting middleware for shutdown endpoint."""
-    if request.url.path == "/system/shutdown":
-        if not rate_limiter.is_allowed():
-            logger.warning(f"Rate limit exceeded for request to {request.url.path}")
-            return JSONResponse(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                content={
-                    "detail": "Rate limit exceeded. Try again later.",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                },
-            )
-    return await call_next(request)
+# NOTE: Rate limiting is intentionally NOT implemented as pre-auth middleware.
+# It is enforced inside the shutdown endpoint *after* token verification and is
+# keyed per client IP, so unauthenticated or failed requests can never consume
+# the budget and lock out a legitimate emergency shutdown.
 
 
 @app.get("/healthz")
@@ -279,6 +347,16 @@ async def execute_shutdown(request: Request, all_nodes: str = None):
 
     # --- Validation (synchronous, must complete before returning) ---
 
+    # Rate limiting runs here — AFTER verify_token has already succeeded — and is
+    # keyed per client IP. This guarantees failed/unauthenticated traffic cannot
+    # throttle a real emergency shutdown.
+    if not rate_limiter.is_allowed(_client_ip(request)):
+        logger.warning("Rate limit exceeded for authenticated shutdown request")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Try again later.",
+        )
+
     if not NODE_NAME:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -311,7 +389,10 @@ async def execute_shutdown(request: Request, all_nodes: str = None):
     else:
         # User request: cluster-wide shutdown
         logger.info("Cluster-wide shutdown requested")
-        asyncio.create_task(coordinate_cluster_shutdown())
+        task = asyncio.create_task(coordinate_cluster_shutdown())
+        # Retain a reference so the task isn't garbage-collected mid-flight.
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     return {
         "status": "Shutdown sequence initiated" if is_peer_call else "Cluster-wide shutdown sequence initiated",
@@ -321,10 +402,10 @@ async def execute_shutdown(request: Request, all_nodes: str = None):
 
 def check_ip_online(ip: str) -> bool:
     """Check if a peer node's webhook is still online/reachable."""
-    url = f"http://{ip}:{NODE_PORT}/healthz"
+    url = f"{PEER_SCHEME}://{ip}:{NODE_PORT}/healthz"
     req = urllib.request.Request(url, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=3) as response:
+        with urllib.request.urlopen(req, timeout=3, context=_peer_ssl_context()) as response:
             return response.status == 200
     except Exception:
         # If any exception occurs (connection refused, timeout, host unreachable), it is offline
@@ -367,7 +448,7 @@ def run_shutdown_sequence(peer_ips: list[str] = None):
 
 def call_shutdown_on_node(ip: str):
     """Trigger shutdown on a peer node via HTTP POST request using standard urllib."""
-    url = f"http://{ip}:{NODE_PORT}/system/shutdown?all_nodes=false"
+    url = f"{PEER_SCHEME}://{ip}:{NODE_PORT}/system/shutdown?all_nodes=false"
     logger.info(f"Sending shutdown request to peer node at {url}")
     req = urllib.request.Request(
         url,
@@ -378,7 +459,7 @@ def call_shutdown_on_node(ip: str):
         }
     )
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with urllib.request.urlopen(req, timeout=15, context=_peer_ssl_context()) as response:
             res_data = response.read().decode()
             logger.info(f"Peer node at {ip} response: {res_data}")
     except Exception as e:
@@ -539,4 +620,13 @@ def _host_poweroff():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    ssl_args = {}
+    if TLS_ENABLED and os.path.exists(TLS_CERT_PATH) and os.path.exists(TLS_KEY_PATH):
+        ssl_args = {"ssl_certfile": TLS_CERT_PATH, "ssl_keyfile": TLS_KEY_PATH}
+        logger.info("TLS enabled — serving HTTPS on port %s", LISTEN_PORT)
+    elif TLS_ENABLED:
+        logger.warning(
+            "TLS_ENABLED=true but cert/key not found at %s / %s — falling back to plain HTTP",
+            TLS_CERT_PATH, TLS_KEY_PATH,
+        )
+    uvicorn.run(app, host="0.0.0.0", port=LISTEN_PORT, **ssl_args)

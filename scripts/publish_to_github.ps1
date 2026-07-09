@@ -1,21 +1,18 @@
-# PowerShell script to publish Helm chart and UI extension to GitHub Pages
+# PowerShell script to publish Helm chart to GitHub Pages
 # Usage: .\scripts\publish_to_github.ps1
 #
 # Flow:
 #   1. Generate Helm tarball and index.yaml
-#   2. Generate UI plugin static files (yarn build-pkg)
-#   3. Push tarball + index to 'pages' branch
-#   4. Push UI static files to 'pages' branch
+#   2. Push tarball + index to 'pages' branch
 #
-# GitHub Pages serves both at:
+# GitHub Pages serves the Helm chart repository at:
 #   https://zed378.github.io/hvt-shutdown-addons
 #
-# For automated publishing on every push to main, see:
-#   .github/workflows/publish-pages.yml
+# The UI plugin is now served from a separate Docker image (see Dockerfile.ui),
+# NOT from GitHub Pages.
 #
 # Requirements:
 #   - GitHub CLI (gh) authenticated: gh auth login
-#   - Node.js 24+ with yarn or npm installed
 #   - Helm installed
 #   - Git configured with remote origin
 #
@@ -37,12 +34,10 @@ $ErrorActionPreference = "Stop"
 # ── Configuration ──────────────────────────────────────────────────────
 $HelmRepoUrl = "https://${Owner}.github.io/${RepoName}"
 $GithubRepo  = "https://github.com/${Owner}/${RepoName}.git"
-$UiDir       = "hvt-shutdown-ui"
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 $ChartDir    = Join-Path $ProjectRoot "Charts"
-$UiSrcDir    = Join-Path $ProjectRoot $UiDir
 
 $ChartYamlPath = Join-Path $ChartDir "Chart.yaml"
 $ChartVersion  = (Select-String -Path $ChartYamlPath -Pattern '^version:\s*(.+)').Matches.Groups[1].Value.Trim()
@@ -67,14 +62,6 @@ foreach ($cmd in @("helm", "git")) {
     }
 }
 
-try   { $nodeVer = node --version; Write-Host "Node: $nodeVer" }
-catch { Write-Host "Error: Node.js is not installed." -ForegroundColor Red; exit 1 }
-
-if     (Get-Command yarn -ErrorAction SilentlyContinue) { $pkgMgr = "yarn"; Write-Host "Yarn: $(yarn --version)" }
-elseif (Get-Command npm  -ErrorAction SilentlyContinue) { $pkgMgr = "npm";  Write-Host "npm:  $(npm --version)"  }
-else   { Write-Host "Error: Neither yarn nor npm is installed." -ForegroundColor Red; exit 1 }
-Write-Host ""
-
 $remoteUrl = git remote get-url origin 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Error: No git remote 'origin' configured." -ForegroundColor Red; exit 1
@@ -91,7 +78,7 @@ if (Get-Command gh -ErrorAction SilentlyContinue) {
 Write-Host ""
 
 # ── Step 1: Generate Helm tarball and index.yaml ───────────────────────
-Write-Host "=== [1/4] Generating Helm tarball and index.yaml ===" -ForegroundColor Cyan
+Write-Host "=== [1/2] Generating Helm tarball and index.yaml ===" -ForegroundColor Cyan
 
 # Copy scripts into Charts/scripts/ for ConfigMap inclusion
 $ChartScriptsDir = Join-Path $ChartDir "scripts"
@@ -118,40 +105,8 @@ Write-Host "=== index.yaml ===" -ForegroundColor Cyan
 Get-Content $IndexYamlFile
 Write-Host ""
 
-# ── Step 2: Generate UI plugin static files ────────────────────────────
-Write-Host "=== [2/4] Generating UI plugin static files ===" -ForegroundColor Cyan
-Set-Location $UiSrcDir
-
-if (-not (Test-Path "node_modules")) {
-    Write-Host "Installing UI dependencies..." -ForegroundColor Yellow
-    if ($pkgMgr -eq "yarn") { yarn install --immutable } else { npm install }
-}
-
-yarn build-pkg $UiDir true
-
-$DistPkgDir = Join-Path $UiSrcDir "dist-pkg"
-if (-not (Test-Path $DistPkgDir)) {
-    Write-Host "Error: Build output not found at $DistPkgDir" -ForegroundColor Red; exit 1
-}
-
-$versionDir = Get-ChildItem -Directory $DistPkgDir |
-    Where-Object { $_.Name -match '^hvt-shutdown-ui-.+' } |
-    Select-Object -First 1
-if (-not $versionDir) {
-    Write-Host "Error: No versioned build directory found in $DistPkgDir" -ForegroundColor Red
-    Get-ChildItem $DistPkgDir; exit 1
-}
-
-$UiVersionDir = $versionDir.FullName
-$UiVersion    = $versionDir.Name -replace '^hvt-shutdown-ui-', ''
-Write-Host "UI version: $UiVersion" -ForegroundColor Green
-Write-Host "Output:     $UiVersionDir" -ForegroundColor Green
-Write-Host ""
-
-Set-Location $ProjectRoot
-
-# ── Step 3: Push tarball + index to pages branch ───────────────────────
-Write-Host "=== [3/4] Pushing tarball and index to '$Branch' branch ===" -ForegroundColor Cyan
+# ── Step 2: Push tarball + index to pages branch ───────────────────────
+Write-Host "=== [2/2] Pushing tarball and index to '$Branch' branch ===" -ForegroundColor Cyan
 $PagesDir = Join-Path $TempDir "pages"
 New-Item -ItemType Directory -Force -Path $PagesDir | Out-Null
 
@@ -173,25 +128,6 @@ git commit -m "Publish ${ChartName} v${ChartVersion}" --allow-empty 2>$null
 if ($LASTEXITCODE -ne 0) { Write-Host "Nothing to commit." -ForegroundColor Yellow }
 git push origin $Branch
 Write-Host "Pushed: $ChartFilename + index.yaml" -ForegroundColor Green
-Write-Host ""
-
-# ── Step 4: Push UI static files to pages branch ──────────────────────
-Write-Host "=== [4/4] Pushing UI static files to '$Branch' branch ===" -ForegroundColor Cyan
-
-# Pull latest after the helm push to avoid conflicts
-git pull origin $Branch
-
-$DestVersionDir = Join-Path $PagesDir "hvt-shutdown-ui-$UiVersion"
-if (Test-Path $DestVersionDir) { Remove-Item -Recurse -Force $DestVersionDir }
-New-Item -ItemType Directory -Force -Path $DestVersionDir | Out-Null
-Copy-Item -Recurse -Path "$UiVersionDir\*" -Destination $DestVersionDir
-Copy-Item (Join-Path $UiVersionDir "package.json") (Join-Path $PagesDir "package.json") -Force
-
-git add "hvt-shutdown-ui-$UiVersion" package.json
-git commit -m "Publish UI v${UiVersion}" --allow-empty 2>$null
-if ($LASTEXITCODE -ne 0) { Write-Host "Nothing to commit." -ForegroundColor Yellow }
-git push origin $Branch
-Write-Host "Pushed: hvt-shutdown-ui-$UiVersion/ + package.json" -ForegroundColor Green
 
 Set-Location $ProjectRoot
 
@@ -216,10 +152,10 @@ Write-Host "Done." -ForegroundColor Green
 Write-Host ""
 Write-Host "=== Published successfully ===" -ForegroundColor Green
 Write-Host ""
-Write-Host "Helm index:   https://${Owner}.github.io/${RepoName}/index.yaml"                                              -ForegroundColor Green
-Write-Host "Helm chart:   https://${Owner}.github.io/${RepoName}/${ChartFilename}"                                        -ForegroundColor Green
-Write-Host "UIPlugin URL: https://${Owner}.github.io/${RepoName}"                                                         -ForegroundColor Green
-Write-Host "UI plugin:    https://${Owner}.github.io/${RepoName}/hvt-shutdown-ui-${UiVersion}/package/index.html"         -ForegroundColor Green
+Write-Host "Helm index:  https://${Owner}.github.io/${RepoName}/index.yaml"                       -ForegroundColor Green
+Write-Host "Helm chart:  https://${Owner}.github.io/${RepoName}/${ChartFilename}"                  -ForegroundColor Green
+Write-Host ""
+Write-Host "Note: UI plugin is served from Docker image (zed378/hvt-shutdown-ui), not GitHub Pages." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "To add the Helm repo:" -ForegroundColor Cyan
 Write-Host "  helm repo add hvt-shutdown ${HelmRepoUrl}"

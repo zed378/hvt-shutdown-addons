@@ -7,13 +7,23 @@
         <input
           v-model="token"
           type="password"
-          placeholder="Enter secure token"
+          placeholder="Enter secure token (openssl rand -hex 32)"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
           @input="updateValues"
           class="form-control"
         />
+        <p v-if="token && token.length < 32" class="text-warning mt-5">
+          This token is short. Use a strong random value, e.g.
+          <code>openssl rand -hex 32</code>.
+        </p>
         <p class="text-muted mt-5">
           This token is required for the node-shutdown webhook to accept
-          requests. It will be stored in the values.yaml automatically.
+          requests. It is stored in the add-on's values automatically. Anyone who
+          can read this add-on can read the token, so treat add-on access as
+          sensitive and rotate the token periodically.
         </p>
       </div>
     </div>

@@ -14,13 +14,19 @@ htmlcov/
 .tox/
 .pytest_cache/
 Dockerfile
+Dockerfile.ui
 docker-compose*.yml
 .github/
 *.egg-info/
 Charts
-hvt-shutdown-ui
 tests
-*/node_modules
+app
+scripts
+architecture.svg
+
+# UI build artifacts (rebuild from source)
+hvt-shutdown-ui/node_modules
+hvt-shutdown-ui/dist-pkg
 
 # agents
 .kilo
