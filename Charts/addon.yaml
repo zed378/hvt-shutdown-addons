@@ -12,7 +12,7 @@ spec:
   # Helm chart repository URL
   repo: "https://zed378.github.io/hvt-shutdown-addons/"
   # Chart version
-  version: "1.2.1"
+  version: "1.3.1"
   # Chart name (must match chart.yaml name)
   chart: node-shutdown
   # Values to pass to the Helm chart - will be merged with chart's values.yaml
@@ -25,7 +25,7 @@ spec:
       # it here. The chart base64-encodes this value into the Secret automatically.
       # Fail-closed: if left empty, a strong random token is generated at install
       # time (read it from the "node-shutdown-auth" Secret). Do NOT commit a real token.
-      token: "token123"
+      token: "cFFMZURta3hoTXB5YVlVVTN2MTQzYlZ1WkM5QmdHY3pSS1dqTThIaVJ0OXJVMUVaM1N6alowNjNaZGl3WUZhcA=="
 
     image:
       registry: "zed378"
@@ -51,11 +51,14 @@ spec:
       clusterRoleBindingName: "node-shutdown-binding"
       serviceAccountName: "node-shutdown-sa"
       serviceAccountNamespace: "harvester-system"
-      # Least-privilege: only read VMIs and list/get/delete pods.
+      # Stop VMs by patching VirtualMachines; read/delete VMIs; delete pods.
       rules:
         - apiGroups: ["kubevirt.io"]
+          resources: ["virtualmachines"]
+          verbs: ["get", "list", "patch", "update"]
+        - apiGroups: ["kubevirt.io"]
           resources: ["virtualmachineinstances"]
-          verbs: ["get", "list", "watch"]
+          verbs: ["get", "list", "watch", "delete"]
         - apiGroups: [""]
           resources: ["pods"]
           verbs: ["get", "list", "delete"]
@@ -195,3 +198,27 @@ spec:
         requests:
           cpu: "50m"
           memory: "32Mi"
+
+    # Standalone token console (network-restricted, UNAUTHENTICATED). Sets/rotates
+    # the shutdown auth token from a simple web page on its own NodePort, without
+    # needing the Rancher extension framework. RESTRICT NodePort 30089 to a
+    # trusted management network with a host firewall.
+    tokenConsole:
+      enabled: true
+      name: node-shutdown-console
+      serviceAccountName: node-shutdown-console-sa
+      replicas: 1
+      minTokenLength: 32
+      nodePort:
+        enabled: true
+        port: 30089
+        targetPort: 8080
+        nodePort: 30089
+        externalTrafficPolicy: Cluster
+      resources:
+        limits:
+          cpu: "200m"
+          memory: "128Mi"
+        requests:
+          cpu: "50m"
+          memory: "64Mi"

@@ -148,9 +148,10 @@ kubectl apply -f Charts/addon.yaml
 kubectl patch addon node-shutdown -n harvester-system --type=json -p '[{"op": "replace", "path": "/spec/enabled", "value": true}]'
 ```
 
-Once enabled, the bundled UI extension is loaded into the Harvester dashboard automatically. To configure your Authentication Token:
+There are three ways to configure the Authentication Token:
 
-- **In the Harvester UI (recommended)**: navigate to **Advanced -> Addons**, click **Edit Config** on the `node-shutdown` addon. The extension adds a **Node Shutdown Configuration** tab with an **Authentication Token** field — enter your token and Save. (Behind the scenes this writes `auth.token` into the addon's `valuesContent`.)
+- **Token Console (works on any Harvester)**: a standalone web page served on its own NodePort (default **30089**) — open `http://VIP:30089`, enter or generate a token, Save. It writes the `node-shutdown-auth` Secret and the change applies within ~1 minute **without restarting** the DaemonSet. See [Token Console](#token-console) below. ⚠ This page is unauthenticated — restrict NodePort 30089 to your management subnet.
+- **Harvester UI extension**: navigate to **Advanced -> Addons**, click **Edit Config** on the `node-shutdown` addon — the extension adds a **Node Shutdown Configuration** tab with an **Authentication Token** field. (Requires UI Extensions enabled in the Harvester dashboard.)
 - **Before install / via YAML**: edit `auth.token` in `Charts/addon.yaml` (under `valuesContent`) or `Charts/values.yaml`.
 
 If `auth.token` is left empty, the chart generates a strong random token at install time — read it back from the `node-shutdown-auth` Secret:
@@ -287,8 +288,95 @@ All values are in `Charts/values.yaml`:
 | `uiPlugin.endpoint`                 | Internal DNS endpoint Rancher loads the UI bundle from | `http://hvt-shutdown-ui.cattle-ui-plugin-system.svc:80` |
 | `uiPlugin.updateStrategy.maxUnavailable` | Rolling-update max unavailable pods (0 = zero-downtime) | 0 |
 | `uiPlugin.updateStrategy.maxSurge`  | Rolling-update surge pods (new pod runs alongside old) | 1 |
+| `tokenConsole.enabled`              | Deploy the standalone token console       | true           |
+| `tokenConsole.nodePort.nodePort`    | NodePort for the token console UI         | 30089          |
+| `tokenConsole.minTokenLength`       | Weak-token warning threshold in the UI    | 32             |
 
 Environment-only knobs (not Helm values): `ENABLE_DOCS` (default `false`) re-enables `/docs` and `/openapi.json`.
+
+## Token Console
+
+The **token console** is a self-contained web UI for setting/rotating the shutdown
+auth token that does **not** depend on the Rancher UI-extension framework — it works
+on any Harvester. It's served from the same API image as a separate, unprivileged
+`Deployment` (`node-shutdown-console`) with a ServiceAccount scoped to write only the
+`node-shutdown-auth` Secret, exposed on its own NodePort (default **30089**).
+
+```
+http://VIP:30089        # open in a browser, enter/generate a token, Save
+```
+
+How it applies without a restart: the DaemonSet mounts the `node-shutdown-auth`
+Secret as a file and the API reads the token from it **per request** (`AUTH_TOKEN_FILE`).
+When the console updates the Secret, the kubelet syncs the mounted file and the new
+token takes effect on every node within ~1 minute — no pod restart, no extra RBAC.
+
+> ⚠ **Security:** the console is intentionally **unauthenticated** and can change the
+> credential that gates cluster-wide shutdown. You **must** restrict NodePort `30089`
+> to a trusted management subnet with a host firewall (same guidance as the API port).
+> Disable it entirely with `tokenConsole.enabled: false` if you don't want it.
+
+## UI Extension — testing & distribution
+
+The Harvester dashboard tab (`hvt-shutdown-ui`) is a Rancher UI extension. There are
+three ways it can reach the dashboard, from fastest-to-verify to fully-published:
+
+### 1. Developer Load (fastest — no publishing, no caching)
+
+The quickest way to confirm the extension actually renders in your dashboard. It
+loads the built bundle **client-side**, bypassing the container image, the `UIPlugin`
+CR, and Rancher's plugin-caching entirely:
+
+```bash
+# Linux/macOS
+./scripts/serve_extension.sh
+# Windows
+.\scripts\serve_extension.ps1
+```
+
+This builds the package and serves it at `http://127.0.0.1:4500/...` (the script
+prints the exact `…/hvt-shutdown-ui-<ver>.umd.min.js` URL). Then in the dashboard:
+
+1. Avatar → **Preferences** → enable **Extension developer features**.
+2. **Extensions** → three-dot menu → **Developer load**.
+3. Paste the printed URL and **Load**.
+
+Because the load is client-side, run the script on the **same machine you browse the
+dashboard from** (the browser must reach `127.0.0.1:4500`). If the **Node Shutdown
+Configuration** tab appears on the add-on's Edit Config screen, the extension code is
+correct and the only remaining question is distribution/caching.
+
+### 2. Official distribution — as a Rancher Extension repository (recommended)
+
+The supported production path is to publish the extension as a **Helm chart repo** and
+add it under **Extensions → Manage Repositories** in the dashboard — Rancher then
+installs *and caches* it for you (unlike a hand-created `UIPlugin`). From the extension
+project:
+
+```bash
+# needs git + push credentials; the target branch must already exist
+cd hvt-shutdown-ui
+yarn install
+yarn publish-pkgs -s <org>/<extension-repo> -b gh-pages
+```
+
+Then in Rancher: **Extensions → ⋮ → Manage Repositories → Create**, and enter
+`https://<org>.github.io/<extension-repo>` with branch `gh-pages`.
+
+> **Caveats for this repo:** `publish-pkgs` needs `git`, an **existing** target branch,
+> and push credentials, and it produces a Helm repo that needs its **own** GitHub Pages
+> site. This repo's `pages` branch already serves the *add-on* chart repo, so publish
+> the **extension** repo to a **separate GitHub repository** (or a Pages subpath) to
+> avoid a collision. Requires **UI Extensions enabled** in the dashboard.
+
+### 3. Bundled `UIPlugin` (what the chart ships today)
+
+The chart also deploys the extension as an in-cluster container + `UIPlugin` CR pointing
+at an internal DNS endpoint (`uiPlugin.*` values). This is the air-gapped/manual path and
+**only works if Rancher's plugin-caching controller is active** (UI Extensions enabled).
+If the `UIPlugin` shows an empty `STATE` (never `cached`), that controller isn't running —
+use Developer Load (1) to verify the code, then the token console or an Extension
+repository (2) to actually ship it.
 
 ## Transport Security (TLS)
 
@@ -372,6 +460,20 @@ kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/health
 ```
 
 ## Changelog
+
+### v1.3.1 — Fix: VMs not shutting down
+
+- **Correct VM shutdown mechanism**: the service previously deleted `virt-launcher` pods, which does **not** stop a KubeVirt/Harvester VM — the controller recreates the VMI and the VM keeps running. It now **stops the owning VirtualMachine** (`runStrategy: Halted` / `running: false`, i.e. a graceful ACPI guest shutdown that doesn't restart), deletes standalone VMIs, and force-deletes any straggler virt-launcher pods only after the timeout.
+- **RBAC**: added `get/list/patch/update` on `kubevirt.io/virtualmachines` and `delete` on `virtualmachineinstances` (still least-privilege).
+- Note: stopped VMs stay **Halted** after the node powers back on (they won't auto-start) — start them from the Harvester UI or automation if desired.
+
+### v1.3.0 — Token console & live token reload
+
+- **Standalone token console**: a self-contained, network-restricted web UI (`node-shutdown-console`) to set/rotate the auth token, served from the API image on its own NodePort (default `30089`). Works on any Harvester — no Rancher UI-extension framework required. Runs unprivileged with a ServiceAccount scoped to write only the `node-shutdown-auth` Secret. **Unauthenticated by design — restrict its NodePort to a trusted management subnet.**
+- **Live token reload**: the API now reads the token from the mounted Secret file (`AUTH_TOKEN_FILE`) per request, so rotating it (via the console or `kubectl`) takes effect within ~1 minute **without restarting** the DaemonSet. Falls back to the `AUTH_TOKEN` env var when the file is absent.
+- **UI extension retained** alongside the console (Rancher UIPlugin tab), for environments where UI Extensions is enabled.
+- **UI extension serving fix**: the container now serves the extension bundle at the web root (flattened), so the manifest's `main` resolves and Rancher can cache the `UIPlugin` (previously it 404'd and never cached).
+- **Extension dev tooling**: `scripts/serve_extension.{sh,ps1}` build and serve the extension for Rancher **Developer Load** (Docker-based, no local Node) — the fastest way to verify the dashboard tab renders, independent of publishing/caching. See [UI Extension — testing & distribution](#ui-extension--testing--distribution).
 
 ### v1.2.0 — Security hardening
 

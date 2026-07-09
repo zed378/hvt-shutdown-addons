@@ -1,0 +1,130 @@
+{{- if .Values.tokenConsole.enabled }}
+# Standalone, network-restricted token console. Reuses the API image but runs the
+# app.token_console module as an unprivileged Deployment with a ServiceAccount
+# scoped to read/write ONLY the node-shutdown-auth Secret.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.tokenConsole.serviceAccountName }}
+  namespace: {{ .Values.secret.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.tokenConsole.name }}-role
+  namespace: {{ .Values.secret.namespace }}
+rules:
+  # Least privilege: only get/update/patch the single auth-token Secret.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Values.secret.name }}"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.tokenConsole.name }}-binding
+  namespace: {{ .Values.secret.namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.tokenConsole.serviceAccountName }}
+    namespace: {{ .Values.secret.namespace }}
+roleRef:
+  kind: Role
+  name: {{ .Values.tokenConsole.name }}-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.tokenConsole.name }}
+  namespace: {{ .Values.secret.namespace }}
+  labels:
+    app: {{ .Values.tokenConsole.name }}
+spec:
+  replicas: {{ .Values.tokenConsole.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ .Values.tokenConsole.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.tokenConsole.name }}
+    spec:
+      serviceAccountName: {{ .Values.tokenConsole.serviceAccountName }}
+      containers:
+        - name: console
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "app.token_console"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: SECRET_NAME
+              value: {{ .Values.secret.name | quote }}
+            - name: SECRET_NAMESPACE
+              value: {{ .Values.secret.namespace | quote }}
+            - name: SECRET_KEY
+              value: {{ .Values.secret.key | quote }}
+            - name: LISTEN_PORT
+              value: "8080"
+            - name: MIN_TOKEN_LEN
+              value: "{{ .Values.tokenConsole.minTokenLength }}"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+{{ toYaml .Values.tokenConsole.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.tokenConsole.name }}
+  namespace: {{ .Values.secret.namespace }}
+  labels:
+    app: {{ .Values.tokenConsole.name }}
+spec:
+  type: {{ .Values.tokenConsole.nodePort.enabled | ternary "NodePort" "ClusterIP" }}
+  {{- if .Values.tokenConsole.nodePort.enabled }}
+  externalTrafficPolicy: {{ .Values.tokenConsole.nodePort.externalTrafficPolicy }}
+  {{- end }}
+  selector:
+    app: {{ .Values.tokenConsole.name }}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.tokenConsole.nodePort.port }}
+      targetPort: 8080
+      name: http
+      {{- if .Values.tokenConsole.nodePort.enabled }}
+      nodePort: {{ .Values.tokenConsole.nodePort.nodePort }}
+      {{- end }}
+{{- end }}

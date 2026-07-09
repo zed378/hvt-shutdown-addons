@@ -41,9 +41,17 @@ rbac:
   # (dangerous and unused), pods/status patch (unused), and uiplugins
   # write access (the UIPlugin CR is created by the Helm release, not the app).
   rules:
+    # Stop VMs gracefully by patching the VirtualMachine (runStrategy=Halted /
+    # running=false). This is what actually shuts a VM down — deleting the
+    # virt-launcher pod alone makes KubeVirt restart it.
+    - apiGroups: ["kubevirt.io"]
+      resources: ["virtualmachines"]
+      verbs: ["get", "list", "patch", "update"]
+    # Read VMIs (to find which VMs run on this node) and delete standalone VMIs.
     - apiGroups: ["kubevirt.io"]
       resources: ["virtualmachineinstances"]
-      verbs: ["get", "list", "watch"]
+      verbs: ["get", "list", "watch", "delete"]
+    # Enumerate peer pods and force-delete straggler virt-launcher pods.
     - apiGroups: [""]
       resources: ["pods"]
       verbs: ["get", "list", "delete"]
@@ -220,3 +228,34 @@ uiPlugin:
     requests:
       cpu: "50m"
       memory: "32Mi"
+
+# Standalone token console: a network-restricted, UNAUTHENTICATED web UI to set /
+# rotate the shutdown auth token. Served from the API image as a separate,
+# unprivileged Deployment (ServiceAccount scoped to write only the auth Secret)
+# and exposed on its own NodePort. It does NOT depend on the Rancher extension
+# framework, so it works on any Harvester.
+#
+# SECURITY: because it can change the credential that gates cluster shutdown with
+# no authentication, you MUST restrict its NodePort to a trusted management
+# network with a host firewall.
+tokenConsole:
+  enabled: true
+  name: node-shutdown-console
+  serviceAccountName: node-shutdown-console-sa
+  replicas: 1
+  # Tokens shorter than this trigger a weak-token warning in the UI.
+  minTokenLength: 32
+  # Reuses the API image (image.* above) — no separate image to build/push.
+  nodePort:
+    enabled: true
+    port: 30089
+    targetPort: 8080
+    nodePort: 30089
+    externalTrafficPolicy: Cluster
+  resources:
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+    requests:
+      cpu: "50m"
+      memory: "64Mi"

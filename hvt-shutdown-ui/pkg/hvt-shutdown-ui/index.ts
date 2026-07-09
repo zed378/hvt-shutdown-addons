@@ -14,7 +14,7 @@ export default function(plugin: IPlugin): void {
 
   // Register the custom Add-on tab for node-shutdown
   plugin.addTab(
-    TabLocation.RESOURCE_DETAIL,
+    TabLocation.RESOURCE_DETAIL_PAGE,
     {
       resource: ['harvesterhci.io.addon'],
       mode: ['edit'],
@@ -22,7 +22,7 @@ export default function(plugin: IPlugin): void {
     },
     {
       name: 'node-shutdown-config',
-      labelKey: 'Node Shutdown Configuration',
+      label: 'Node Shutdown Configuration',
       weight: 100,
       component: () => import('./components/NodeShutdownConfig.vue')
     }

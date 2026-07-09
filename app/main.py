@@ -55,6 +55,31 @@ NODE_NAME = os.getenv("NODE_NAME")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 NODE_PORT = int(os.getenv("NODE_PORT", "30088"))
 
+# Optional path to a file containing the auth token (a mounted Secret). When set,
+# the token is read from this file on each request so that rotating the token in
+# the Secret (e.g. via the token console) takes effect WITHOUT restarting the
+# pod — the kubelet syncs the projected Secret within ~1 minute. Falls back to the
+# AUTH_TOKEN env var when the file is absent/empty (backward compatible).
+AUTH_TOKEN_FILE = os.getenv("AUTH_TOKEN_FILE")
+_token_cache = {"value": None, "mtime": None}
+
+
+def _current_token():
+    """Return the active auth token, preferring the live Secret file."""
+    if AUTH_TOKEN_FILE:
+        try:
+            mtime = os.stat(AUTH_TOKEN_FILE).st_mtime
+            if _token_cache["mtime"] != mtime:
+                with open(AUTH_TOKEN_FILE, "r") as f:
+                    _token_cache["value"] = f.read().strip()
+                _token_cache["mtime"] = mtime
+            if _token_cache["value"]:
+                return _token_cache["value"]
+        except OSError:
+            # File missing/unreadable — fall through to the env var.
+            pass
+    return AUTH_TOKEN
+
 # Port this service listens on inside the pod.
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", "8080"))
 
@@ -178,15 +203,16 @@ security = HTTPBearer(auto_error=False)
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Verify authentication token with constant-time comparison."""
-    if not AUTH_TOKEN:
-        logger.error("AUTH_TOKEN environment variable is not configured")
+    active_token = _current_token()
+    if not active_token:
+        logger.error("No auth token configured (AUTH_TOKEN / AUTH_TOKEN_FILE)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication service misconfigured",
         )
     # Never log or echo credential material. Compare in constant time.
     presented = credentials.credentials if credentials else ""
-    if not secrets.compare_digest(presented, AUTH_TOKEN):
+    if not secrets.compare_digest(presented, active_token):
         logger.warning("Failed authentication attempt (invalid or missing token)")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -515,57 +541,67 @@ async def coordinate_cluster_shutdown():
         thread.start()
 
 
-def _graceful_vm_shutdown():
-    """gracefully terminate VM workloads and wait for them to exit."""
-    logger.info(f"Graceful VM shutdown starting on node {NODE_NAME}")
+def _list_virt_launchers_on_node():
+    """Return running virt-launcher pods scheduled on this node."""
+    pods = k8s_core.list_pod_for_all_namespaces(
+        field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
+    ).items
+    return [p for p in pods if p.metadata.name.startswith("virt-launcher-")]
+
+
+def _force_kill_vms_on_node() -> int:
+    """Immediately force-kill all VM workloads on this node.
+
+    Force-deletes every virt-launcher pod on this node with
+    grace_period_seconds=0. This sends SIGKILL to the QEMU process
+    immediately, bypassing any guest-OS shutdown sequence.
+    No waiting, no ACPI signals — hard stop.
+
+    Returns the number of virt-launcher pods killed.
+    """
     try:
-        pods = k8s_core.list_pod_for_all_namespaces(
-            field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
-        ).items
-        virt_launchers = [p for p in pods if p.metadata.name.startswith("virt-launcher-")]
+        launchers = _list_virt_launchers_on_node()
+    except Exception as e:
+        logger.error(f"Failed to list virt-launcher pods: {e}")
+        return 0
 
-        if virt_launchers:
-            logger.info(f"Found {len(virt_launchers)} VM workloads, initiating graceful deletion")
-            for pod in virt_launchers:
-                try:
-                    k8s_core.delete_namespaced_pod(
-                        name=pod.metadata.name,
-                        namespace=pod.metadata.namespace,
-                        body=client.V1DeleteOptions(grace_period_seconds=GRACE_PERIOD_SECONDS),
-                    )
-                    logger.info(f"Deleted virt-launcher pod: {pod.metadata.name}")
-                except Exception as pod_error:
-                    logger.error(f"Failed to delete pod {pod.metadata.name}: {str(pod_error)}")
+    if not launchers:
+        logger.info(f"No virt-launcher pods running on node {NODE_NAME}")
+        return 0
 
-            # Wait for all VMs to terminate before proceeding to host poweroff
-            logger.info(f"Waiting for VMs to shut down (timeout: {VM_SHUTDOWN_TIMEOUT}s)...")
-            shutdown_start = time.time()
-            wait_timeout = max(VM_SHUTDOWN_TIMEOUT, 300)  # Cap absolute wait at 5 minutes
-            while time.time() - shutdown_start < wait_timeout:
-                remaining_pods = k8s_core.list_pod_for_all_namespaces(
-                    field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
-                ).items
-                remaining_vms = [p for p in remaining_pods if p.metadata.name.startswith("virt-launcher-")]
-                if not remaining_vms:
-                    logger.info("All VMs have been shut down successfully")
-                    break
-                logger.info(f"Waiting for {len(remaining_vms)} VM(s) to shut down...")
-                time.sleep(5)
-            else:
-                remaining_pods = k8s_core.list_pod_for_all_namespaces(
-                    field_selector=f"spec.nodeName={NODE_NAME},status.phase=Running"
-                ).items
-                remaining_vms = [p for p in remaining_pods if p.metadata.name.startswith("virt-launcher-")]
-                if remaining_vms:
-                    vm_names = [p.metadata.name for p in remaining_vms]
-                    logger.warning(f"Timeout reached. {len(remaining_vms)} VM(s) still running: {vm_names}. Proceeding with node shutdown anyway.")
-                else:
-                    logger.info("All VMs shut down within timeout period")
+    logger.info(f"Force-killing {len(launchers)} virt-launcher pod(s) on node {NODE_NAME} (grace_period=0)")
+    killed = 0
+    for pod in launchers:
+        pod_name = pod.metadata.name
+        pod_ns = pod.metadata.namespace
+        try:
+            k8s_core.delete_namespaced_pod(
+                name=pod_name,
+                namespace=pod_ns,
+                body=client.V1DeleteOptions(grace_period_seconds=0),
+            )
+            logger.info(f"Force-killed virt-launcher pod {pod_ns}/{pod_name}")
+            killed += 1
+        except Exception as e:
+            logger.error(f"Failed to force-kill pod {pod_ns}/{pod_name}: {e}")
+    return killed
+
+
+def _graceful_vm_shutdown():
+    """Force-stop all VM workloads on this node, then proceed to baremetal poweroff.
+
+    No grace period, no waiting — virt-launcher pods are killed immediately
+    (grace_period_seconds=0). Execution proceeds straight to _host_poweroff().
+    """
+    logger.info(f"Force VM shutdown starting on node {NODE_NAME}")
+    try:
+        killed = _force_kill_vms_on_node()
+        if killed == 0:
+            logger.info("No VM workloads found on this node — proceeding to poweroff")
         else:
-            logger.info("No VM workloads found on this node")
-
+            logger.info(f"Force-killed {killed} VM(s) on node {NODE_NAME} — proceeding immediately to poweroff")
     except Exception as pods_error:
-        logger.error(f"Failed to list/delete VM pods: {str(pods_error)}")
+        logger.error(f"VM force-kill phase failed: {str(pods_error)} — proceeding to poweroff anyway")
 
 
 def _host_poweroff():

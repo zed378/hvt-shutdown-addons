@@ -111,6 +111,11 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secret.name }}
                   key: {{ .Values.secret.key }}
+            # Live-reload source: the token is read from this mounted Secret file
+            # per-request, so rotating it (e.g. via the token console) applies
+            # within ~1 minute without restarting the DaemonSet.
+            - name: AUTH_TOKEN_FILE
+              value: "/etc/auth/{{ .Values.secret.key }}"
             - name: AUDIT_ENABLED
               value: "{{ .Values.auditLogging.enabled }}"
             - name: AUDIT_LOG_PATH
@@ -142,6 +147,9 @@ spec:
               mountPath: {{ .Values.hostPath.mountPath }}
             - name: audit-logs
               mountPath: {{ .Values.auditLogging.mountPath }}
+            - name: auth-token
+              mountPath: /etc/auth
+              readOnly: true
             {{- if .Values.tls.enabled }}
             - name: tls-certs
               mountPath: {{ .Values.tls.mountPath }}
@@ -154,6 +162,9 @@ spec:
             type: {{ .Values.hostPath.type }}
         - name: audit-logs
           emptyDir: {}
+        - name: auth-token
+          secret:
+            secretName: {{ .Values.secret.name }}
         {{- if .Values.tls.enabled }}
         - name: tls-certs
           secret:
