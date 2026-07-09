@@ -231,6 +231,16 @@ metadata:
     app: {{ .Values.uiPlugin.name }}
 spec:
   replicas: {{ .Values.uiPlugin.replicas | default 1 }}
+  # Zero-downtime rollout: never take the serving pod down before the
+  # replacement is Ready (maxUnavailable: 0), and bring the new pod up
+  # alongside the old one (maxSurge) so both run simultaneously during the
+  # transition. The readiness probe below gates the cutover.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.uiPlugin.updateStrategy.maxUnavailable }}
+      maxSurge: {{ .Values.uiPlugin.updateStrategy.maxSurge }}
+  minReadySeconds: {{ .Values.uiPlugin.updateStrategy.minReadySeconds | default 0 }}
   selector:
     matchLabels:
       app: {{ .Values.uiPlugin.name }}

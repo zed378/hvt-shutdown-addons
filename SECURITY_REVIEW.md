@@ -3,6 +3,8 @@
 **Date:** 2026-07-09
 **Scope:** Full codebase — FastAPI shutdown service (`app/`), Helm chart (`Charts/`), Harvester Addon CRD, Vue UI plugin (`hvt-shutdown-ui/`), and container builds.
 
+> **Addendum (post-review):** The UI plugin was refactored to be served from an **internal in-cluster ClusterIP DNS endpoint** (`http://hvt-shutdown-ui.cattle-ui-plugin-system.svc:80`) rather than GitHub Pages. It is built by a dedicated multi-stage image (`Dockerfile.ui`) and deployed by the Helm chart as an nginx `Deployment`/`Service` plus a `UIPlugin` CR. The UI-related findings below (the UI token field, the UI server's CORS/nosniff headers, and `Dockerfile.ui`) still apply. The `uiplugins` RBAC grant remains removed because the `UIPlugin` CR is created by the Helm release, not the runtime service account.
+
 This service is high-impact by design: a single authenticated `POST /system/shutdown` gracefully evicts VM workloads and powers off Harvester baremetal nodes cluster-wide. It runs as a **privileged**, **hostPID/hostNetwork** DaemonSet with the **host root filesystem mounted at `/host`**. Because the blast radius is "power off the entire cluster," authentication and the safety rails around it are the whole game. The findings below are ordered by severity, with the fix applied for each.
 
 ---

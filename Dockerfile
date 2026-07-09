@@ -1,5 +1,5 @@
 # ---- Python runtime with FastAPI ----
-# API-only image. The UI plugin is served from a separate image (see Dockerfile.ui).
+# API-only image.
 FROM python:3.11-slim
 
 # Hardening / hygiene:

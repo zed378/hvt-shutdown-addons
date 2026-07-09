@@ -46,18 +46,19 @@ server {
 }
 NGINX_CONF
 
-# Copy the built version directory contents to nginx html root
-COPY --from=builder /build/dist-pkg/ /usr/share/nginx/html/
-
-# Copy package.json from the versioned folder to the root so it is served at /package.json
-RUN cd /usr/share/nginx/html && \
-    VERSION_DIR=$(ls -d hvt-shutdown-ui-*/ 2>/dev/null | head -1) && \
-    if [ -n "$VERSION_DIR" ]; then \
-        cp "${VERSION_DIR}package.json" ./package.json && \
-        echo "Serving UI version directory: $VERSION_DIR"; \
-    else \
-        echo "ERROR: No versioned directory found"; exit 1; \
-    fi
+# Serve the extension bundle at the web ROOT.
+# `yarn build-pkg` emits dist-pkg/<name>-<version>/ containing the umd bundle and
+# its package.json. We flatten THAT directory's contents into the web root so the
+# manifest's "main" (e.g. hvt-shutdown-ui-1.2.0.umd.min.js) resolves at
+# <endpoint>/<main>. Rancher reads <endpoint>/package.json and then fetches "main"
+# relative to the endpoint root; if the JS lives in a subdirectory it 404s and the
+# UIPlugin is silently never cached (STATE stays empty). Flattening fixes that.
+COPY --from=builder /build/dist-pkg/ /tmp/dist-pkg/
+RUN VERSION_DIR=$(ls -d /tmp/dist-pkg/hvt-shutdown-ui-*/ 2>/dev/null | head -1) && \
+    if [ -z "$VERSION_DIR" ]; then echo "ERROR: No versioned build dir found"; exit 1; fi && \
+    cp -a "${VERSION_DIR}." /usr/share/nginx/html/ && \
+    rm -rf /tmp/dist-pkg && \
+    echo "Serving flattened extension bundle:" && ls -1 /usr/share/nginx/html
 
 EXPOSE 8080
 

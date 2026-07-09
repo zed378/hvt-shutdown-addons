@@ -3,13 +3,10 @@
 #
 # Flow:
 #   1. Generate Helm tarball and index.yaml
-#   2. Push tarball + index to 'pages' branch
+#   2. Push tarball + index + README to 'pages' branch
 #
 # GitHub Pages serves the Helm chart repository at:
 #   https://zed378.github.io/hvt-shutdown-addons
-#
-# The UI plugin is now served from a separate Docker image (see Dockerfile.ui),
-# NOT from GitHub Pages.
 #
 # Requirements:
 #   - GitHub CLI (gh) authenticated: gh auth login
@@ -44,6 +41,7 @@ $ChartVersion  = (Select-String -Path $ChartYamlPath -Pattern '^version:\s*(.+)'
 $ChartName     = (Select-String -Path $ChartYamlPath -Pattern '^name:\s*(.+)').Matches.Groups[1].Value.Trim()
 $ChartTgzFile  = Join-Path $ProjectRoot "${ChartName}-${ChartVersion}.tgz"
 $IndexYamlFile = Join-Path $ProjectRoot "index.yaml"
+$ReadmeFile    = Join-Path $ProjectRoot "README.md"
 $TempDir       = Join-Path $env:TEMP ("hvt-shutdown-pages-" + [Guid]::NewGuid().ToString())
 
 Write-Host ""
@@ -80,16 +78,6 @@ Write-Host ""
 # ── Step 1: Generate Helm tarball and index.yaml ───────────────────────
 Write-Host "=== [1/2] Generating Helm tarball and index.yaml ===" -ForegroundColor Cyan
 
-# Copy scripts into Charts/scripts/ for ConfigMap inclusion
-$ChartScriptsDir = Join-Path $ChartDir "scripts"
-New-Item -ItemType Directory -Force -Path $ChartScriptsDir | Out-Null
-Get-ChildItem "$ScriptDir\*.sh"  | Where-Object { $_.Name -ne "publish_to_github.sh" } |
-    Copy-Item -Destination $ChartScriptsDir -ErrorAction SilentlyContinue
-Get-ChildItem "$ScriptDir\*.ps1"    -ErrorAction SilentlyContinue |
-    Copy-Item -Destination $ChartScriptsDir -ErrorAction SilentlyContinue
-Get-ChildItem "$ScriptDir\*.mac.sh" -ErrorAction SilentlyContinue |
-    Copy-Item -Destination $ChartScriptsDir -ErrorAction SilentlyContinue
-
 helm package $ChartDir --destination $ProjectRoot
 if (-not (Test-Path $ChartTgzFile)) {
     Write-Host "Error: Failed to package Helm chart." -ForegroundColor Red; exit 1
@@ -119,29 +107,27 @@ Write-Host "Cloned '$Branch' branch." -ForegroundColor Green
 
 Copy-Item $ChartTgzFile  (Join-Path $PagesDir $ChartFilename)
 Copy-Item $IndexYamlFile (Join-Path $PagesDir "index.yaml")
+if (Test-Path $ReadmeFile) {
+    Copy-Item $ReadmeFile (Join-Path $PagesDir "README.md")
+} else {
+    Write-Host "Warning: README.md not found at $ReadmeFile - skipping." -ForegroundColor Yellow
+}
 
 Set-Location $PagesDir
 git config user.email "${Owner}@users.noreply.github.com"
 git config user.name  $Owner
 git add $ChartFilename index.yaml
+if (Test-Path (Join-Path $PagesDir "README.md")) { git add README.md }
 git commit -m "Publish ${ChartName} v${ChartVersion}" --allow-empty 2>$null
 if ($LASTEXITCODE -ne 0) { Write-Host "Nothing to commit." -ForegroundColor Yellow }
 git push origin $Branch
-Write-Host "Pushed: $ChartFilename + index.yaml" -ForegroundColor Green
+Write-Host "Pushed: $ChartFilename + index.yaml + README.md" -ForegroundColor Green
 
 Set-Location $ProjectRoot
 
 # ── Cleanup ────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== Cleaning up ===" -ForegroundColor Yellow
-$cleanupScripts = @(
-    "publish_to_github.sh", "publish_to_github.ps1",
-    "publish_chart.sh",     "publish_chart.ps1", "publish_chart.mac.sh",
-    "create_release.sh",    "create_release.ps1"
-)
-foreach ($s in $cleanupScripts) {
-    Remove-Item (Join-Path $ChartDir "scripts\$s") -Force -ErrorAction SilentlyContinue
-}
 Remove-Item $ChartTgzFile  -Force -ErrorAction SilentlyContinue
 Remove-Item $IndexYamlFile -Force -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force (Join-Path $ProjectRoot "charts-output") -ErrorAction SilentlyContinue
@@ -154,8 +140,6 @@ Write-Host "=== Published successfully ===" -ForegroundColor Green
 Write-Host ""
 Write-Host "Helm index:  https://${Owner}.github.io/${RepoName}/index.yaml"                       -ForegroundColor Green
 Write-Host "Helm chart:  https://${Owner}.github.io/${RepoName}/${ChartFilename}"                  -ForegroundColor Green
-Write-Host ""
-Write-Host "Note: UI plugin is served from Docker image (zed378/hvt-shutdown-ui), not GitHub Pages." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "To add the Helm repo:" -ForegroundColor Cyan
 Write-Host "  helm repo add hvt-shutdown ${HelmRepoUrl}"

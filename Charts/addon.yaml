@@ -12,7 +12,7 @@ spec:
   # Helm chart repository URL
   repo: "https://zed378.github.io/hvt-shutdown-addons/"
   # Chart version
-  version: "1.2.0"
+  version: "1.2.1"
   # Chart name (must match chart.yaml name)
   chart: node-shutdown
   # Values to pass to the Helm chart - will be merged with chart's values.yaml
@@ -25,7 +25,7 @@ spec:
       # it here. The chart base64-encodes this value into the Secret automatically.
       # Fail-closed: if left empty, a strong random token is generated at install
       # time (read it from the "node-shutdown-auth" Secret). Do NOT commit a real token.
-      token: ""
+      token: "token123"
 
     image:
       registry: "zed378"
@@ -161,14 +161,10 @@ spec:
       enabled: false
       ingressFromCidr: null # e.g. "10.0.0.0/8"
 
-    # Scripts ConfigMap for DaemonSet container
-    scripts:
-      enabled: true
-      configMapName: "node-shutdown-webhook-scripts"
-      mountPath: "/opt/scripts"
-
-    # Rancher UIPlugin configuration
-    # UI static files are served from a separate in-cluster container image (nginx).
+    # Rancher UIPlugin configuration.
+    # The UI extension is served from a separate in-cluster container image and
+    # loaded by Rancher/Harvester via the internal ClusterIP service DNS endpoint
+    # below (NOT GitHub Pages).
     uiPlugin:
       enabled: true
       createUIPluginResource: true
@@ -186,6 +182,12 @@ spec:
       service:
         port: 80
       replicas: 1
+      # Zero-downtime rolling update: keep the old pod serving until the new
+      # one is Ready (maxUnavailable: 0) and surge the new pod alongside it.
+      updateStrategy:
+        maxUnavailable: 0
+        maxSurge: 1
+        minReadySeconds: 0
       resources:
         limits:
           cpu: "100m"
@@ -193,5 +195,3 @@ spec:
         requests:
           cpu: "50m"
           memory: "32Mi"
-
-

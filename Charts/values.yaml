@@ -166,23 +166,19 @@ networkPolicy:
   # When set, only allows ingress from this source CIDR on the API port.
   ingressFromCidr: null # e.g., "10.0.0.0/8"
 
-# Scripts ConfigMap for DaemonSet container
-scripts:
-  enabled: true
-  configMapName: "node-shutdown-webhook-scripts"
-  mountPath: "/opt/scripts"
-
 # Rancher UIPlugin (installed by this Helm chart)
-# UI static files are served from a separate in-cluster container image (nginx).
+# The UI extension is a Rancher UI plugin (module-federation bundle) served from
+# a separate in-cluster container image (nginx). Rancher/Harvester loads it from
+# the internal ClusterIP service DNS endpoint below — NOT from GitHub Pages.
 uiPlugin:
   enabled: true
-  # When true, creates the UIPlugin CR after the endpoint is verified available
+  # When true, creates the UIPlugin CR so Rancher picks up the extension
   createUIPluginResource: true
   # UIPlugin metadata
   name: hvt-shutdown-ui
   namespace: cattle-ui-plugin-system
 
-  # UI container image (separate from the API image)
+  # UI container image (separate from the API image, built by Dockerfile.ui)
   image:
     registry: "zed378"
     repository: "hvt-shutdown-ui"
@@ -191,9 +187,10 @@ uiPlugin:
 
   # UIPlugin spec
   pluginName: hvt-shutdown-ui
-  # Typically matches the UI extension version (kept aligned with chart version by default)
+  # Kept aligned with the chart version
   pluginVersion: "1.2.0"
-  # UI plugin endpoint - served from the in-cluster ClusterIP service
+  # Internal DNS endpoint of the in-cluster ClusterIP service that serves the
+  # extension bundle. Format: <service>.<namespace>.svc:<port>
   endpoint: "http://hvt-shutdown-ui.cattle-ui-plugin-system.svc:80"
 
   # Rancher UIPlugin caching behavior
@@ -205,6 +202,15 @@ uiPlugin:
 
   # Number of replicas for the UI deployment
   replicas: 1
+
+  # Rolling update strategy for zero-downtime UI transitions.
+  # maxUnavailable: 0 keeps the serving pod up until the new one is Ready;
+  # maxSurge: 1 starts the replacement alongside it (both run simultaneously).
+  updateStrategy:
+    maxUnavailable: 0
+    maxSurge: 1
+    # Optional: seconds a new pod must stay Ready before it's considered available.
+    minReadySeconds: 0
 
   # Resource limits for the UI container
   resources:

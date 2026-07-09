@@ -4,13 +4,10 @@
 #
 # Flow:
 #   1. Generate Helm tarball and index.yaml
-#   2. Push tarball + index to 'pages' branch
+#   2. Push tarball + index + README to 'pages' branch
 #
 # GitHub Pages serves the Helm chart repository at:
 #   https://zed378.github.io/hvt-shutdown-addons
-#
-# The UI plugin is now served from a separate Docker image (see Dockerfile.ui),
-# NOT from GitHub Pages.
 #
 # Requirements:
 #   - GitHub CLI (gh) authenticated: gh auth login
@@ -40,6 +37,7 @@ CHART_VERSION=$(grep '^version:' "$CHART_DIR/Chart.yaml" | awk '{print $2}' | tr
 CHART_NAME=$(grep '^name:'    "$CHART_DIR/Chart.yaml" | awk '{print $2}' | tr -d '"')
 CHART_TGZ_FILE="$PROJECT_ROOT/${CHART_NAME}-${CHART_VERSION}.tgz"
 INDEX_YAML_FILE="$PROJECT_ROOT/index.yaml"
+README_FILE="$PROJECT_ROOT/README.md"
 
 echo "=== GitHub Pages Publisher ==="
 echo ""
@@ -74,15 +72,6 @@ echo ""
 # ── Step 1: Generate Helm tarball and index.yaml ───────────────────────
 echo "=== [1/2] Generating Helm tarball and index.yaml ==="
 
-# Copy scripts into Charts/scripts/ for ConfigMap inclusion
-mkdir -p "$CHART_DIR/scripts"
-for f in "$PROJECT_ROOT/scripts"/*.sh; do
-    base=$(basename "$f")
-    [ "$base" != "publish_to_github.sh" ] && cp "$f" "$CHART_DIR/scripts/"
-done
-cp "$PROJECT_ROOT/scripts"/*.ps1    "$CHART_DIR/scripts/" 2>/dev/null || true
-cp "$PROJECT_ROOT/scripts"/*.mac.sh "$CHART_DIR/scripts/" 2>/dev/null || true
-
 helm package "$CHART_DIR" --destination "$PROJECT_ROOT"
 
 if [ ! -f "$CHART_TGZ_FILE" ]; then
@@ -115,15 +104,21 @@ fi
 
 cp "$CHART_TGZ_FILE"  "$PAGES_DIR/"
 cp "$INDEX_YAML_FILE" "$PAGES_DIR/"
+if [ -f "$README_FILE" ]; then
+    cp "$README_FILE" "$PAGES_DIR/README.md"
+else
+    echo "Warning: README.md not found at $README_FILE — skipping."
+fi
 
 cd "$PAGES_DIR"
 git config user.email "${OWNER}@users.noreply.github.com"
 git config user.name  "$OWNER"
 git add "$CHART_FILENAME" index.yaml
+[ -f README.md ] && git add README.md
 git commit -m "Publish ${CHART_NAME} v${CHART_VERSION}" --allow-empty \
     || echo "Nothing to commit."
 git push origin "$BRANCH"
-echo "Pushed: $CHART_FILENAME + index.yaml"
+echo "Pushed: $CHART_FILENAME + index.yaml + README.md"
 
 cd "$PROJECT_ROOT"
 
@@ -140,8 +135,6 @@ echo "=== Published successfully ==="
 echo ""
 echo "Helm index:  https://${OWNER}.github.io/${REPO_NAME}/index.yaml"
 echo "Helm chart:  https://${OWNER}.github.io/${REPO_NAME}/${CHART_FILENAME}"
-echo ""
-echo "Note: UI plugin is served from Docker image (zed378/hvt-shutdown-ui), not GitHub Pages."
 echo ""
 echo "To add the Helm repo:"
 echo "  helm repo add hvt-shutdown ${HELM_REPO_URL}"

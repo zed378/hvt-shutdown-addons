@@ -15,7 +15,7 @@ This service runs as a DaemonSet on each node in a Harvester cluster. It exposes
 - **Helm Chart**: Centralized configuration via `Charts/values.yaml`
 - **Kubevirt Aware**: Gracefully terminates VM workloads before host shutdown with timeout-based fallback
 - **Health Checks**: Liveness, readiness, and Kubernetes connectivity probes
-- **UI Plugin**: Vue.js frontend extension built into Docker image, served on port 8081
+- **UI Extension**: A Rancher/Harvester dashboard tab for entering the auth token, served from a separate in-cluster container and loaded via an internal ClusterIP DNS endpoint (not GitHub Pages)
 
 ## Security Features
 
@@ -39,7 +39,7 @@ This service runs as a DaemonSet on each node in a Harvester cluster. It exposes
 
 ### Least-Privilege RBAC
 
-- **Pods-Only Access**: The service account can only read VM instances and `get`/`list`/`delete` pods. It can no longer delete nodes/namespaces/events, patch pod status, or write UIPlugin resources (the UIPlugin CR is created by the Helm release itself)
+- **Pods-Only Access**: The service account can only read VM instances and `get`/`list`/`delete` pods. It can no longer delete nodes/namespaces/events or patch pod status
 
 ### Concurrent Shutdown Protection
 
@@ -93,18 +93,24 @@ Edit `Charts/values.yaml` and update:
 - `auth.token`: Your generated secure token
 - `image.registry` and `image.repository`: Your container registry
 
-### 4. Build & Push Docker Image
+### 4. Build & Push Docker Images
+
+There are two images — the API backend and the UI extension:
 
 ```bash
+# API backend (FastAPI, port 8080)
 docker build -t your-registry/hvt-shutdown:latest .
 docker push your-registry/hvt-shutdown:latest
+
+# UI extension (Rancher UI plugin, built + served by nginx on port 8080)
+docker build -f Dockerfile.ui -t your-registry/hvt-shutdown-ui:latest .
+docker push your-registry/hvt-shutdown-ui:latest
 ```
 
-The Docker image includes:
+- **`Dockerfile`** — Python FastAPI backend on port 8080.
+- **`Dockerfile.ui`** — multi-stage build: Node compiles the Rancher UI extension bundle from `hvt-shutdown-ui/`, then nginx serves the static bundle. Everything needed to build the UI is handled inside the image, so no local Node/Yarn toolchain is required.
 
-- UI extension built from `hvt-shutdown-ui` (built into image)
-- Python FastAPI backend on port 8080
-- UI static files served on port 8081
+Set the image locations in `Charts/values.yaml` (`image.*` and `uiPlugin.image.*`) to match your registry.
 
 ### 5. Package and Publish Helm Chart
 
@@ -142,13 +148,16 @@ kubectl apply -f Charts/addon.yaml
 kubectl patch addon node-shutdown -n harvester-system --type=json -p '[{"op": "replace", "path": "/spec/enabled", "value": true}]'
 ```
 
-Once enabled, the Add-on's bundled Harvester UI extension is automatically injected into the Harvester Dashboard.
+Once enabled, the bundled UI extension is loaded into the Harvester dashboard automatically. To configure your Authentication Token:
 
-To configure your Authentication Token:
+- **In the Harvester UI (recommended)**: navigate to **Advanced -> Addons**, click **Edit Config** on the `node-shutdown` addon. The extension adds a **Node Shutdown Configuration** tab with an **Authentication Token** field — enter your token and Save. (Behind the scenes this writes `auth.token` into the addon's `valuesContent`.)
+- **Before install / via YAML**: edit `auth.token` in `Charts/addon.yaml` (under `valuesContent`) or `Charts/values.yaml`.
 
-1. Navigate to **Advanced -> Addons** in your Harvester UI.
-2. Click **Edit Config** on the `node-shutdown` addon.
-3. You will see a custom graphical interface! Enter your secure token into the **Authentication Token** field and click Save.
+If `auth.token` is left empty, the chart generates a strong random token at install time — read it back from the `node-shutdown-auth` Secret:
+
+```bash
+kubectl get secret node-shutdown-auth -n harvester-system -o jsonpath='{.data.auth-token}' | base64 -d
+```
 
 ### 8. Access the API via NodePort
 
@@ -259,7 +268,7 @@ All values are in `Charts/values.yaml`:
 
 | Variable                            | Description                               | Default        |
 | ----------------------------------- | ----------------------------------------- | -------------- |
-| `auth.token`                        | Bearer token for API authentication (set via UI or here; empty = auto-generated random token, fails closed) | `""` |
+| `auth.token`                        | Bearer token for API authentication (set here or via the add-on config; empty = auto-generated random token, fails closed) | `""` |
 | `image.registry`                    | Docker image registry                     | zed378         |
 | `image.repository`                  | Docker image name                         | hvt-shutdown   |
 | `image.tag`                         | Docker image tag                          | latest         |
@@ -272,7 +281,12 @@ All values are in `Charts/values.yaml`:
 | `tls.enabled`                       | Serve the API over HTTPS (and use HTTPS for peer calls) | false |
 | `tls.secretName`                    | Existing TLS secret (`tls.crt`/`tls.key`); empty = chart self-signs | "" |
 | `tls.peerVerify`                    | Verify peer certificates during coordination | false      |
-| `uiPlugin.createUIPluginResource`   | Auto-create UIPlugin after endpoint ready | true           |
+| `uiPlugin.enabled`                  | Deploy the UI extension (Deployment + Service) | true       |
+| `uiPlugin.createUIPluginResource`   | Create the `UIPlugin` CR so Rancher loads the extension | true |
+| `uiPlugin.image.repository`         | UI extension image name                   | hvt-shutdown-ui |
+| `uiPlugin.endpoint`                 | Internal DNS endpoint Rancher loads the UI bundle from | `http://hvt-shutdown-ui.cattle-ui-plugin-system.svc:80` |
+| `uiPlugin.updateStrategy.maxUnavailable` | Rolling-update max unavailable pods (0 = zero-downtime) | 0 |
+| `uiPlugin.updateStrategy.maxSurge`  | Rolling-update surge pods (new pod runs alongside old) | 1 |
 
 Environment-only knobs (not Helm values): `ENABLE_DOCS` (default `false`) re-enables `/docs` and `/openapi.json`.
 
@@ -317,7 +331,7 @@ networkPolicy:
 3. **Enable NetworkPolicy** where your CNI enforces it: `networkPolicy.enabled: true` + `ingressFromCidr`
 4. **Enable TLS**: Set `tls.enabled: true`, or terminate TLS at an ingress/load-balancer
 5. **Monitor Audit Logs**: Regularly review `/var/log/shutdown-audit.log`
-6. **Rotate Tokens**: Periodically change the token (via the Add-on UI) — it updates the Kubernetes secret
+6. **Rotate Tokens**: Periodically change `auth.token` (in the add-on config / chart values) — it updates the Kubernetes secret
 7. **Keep Docs Disabled**: Leave `ENABLE_DOCS=false` in production
 
 ## Testing
@@ -370,7 +384,7 @@ kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/health
 - **Dependencies pinned** with upper bounds; unused `python-multipart`/`python-dateutil` removed. Dockerfile hygiene improvements.
 - **Optional TLS**: `tls.enabled: true` serves the API over HTTPS and encrypts peer-to-peer coordination calls; chart self-signs or accepts a bring-your-own secret; probes switch to the HTTPS scheme automatically.
 - **NetworkPolicy source-CIDR restriction** wired in via `networkPolicy.ingressFromCidr` (with a documented hostNetwork caveat).
-- **UI token field hardened**: autocomplete disabled, weak-token warning, and a note that add-on read access exposes the token.
+- **UI extension served from internal cluster DNS**: the Rancher UI plugin (the **Node Shutdown Configuration** token tab) is built by a dedicated multi-stage image (`Dockerfile.ui`) and served by an in-cluster nginx `Deployment`/`Service`. Rancher/Harvester loads the bundle from the ClusterIP service DNS endpoint (`http://hvt-shutdown-ui.cattle-ui-plugin-system.svc:80`) instead of GitHub Pages. The `UIPlugin` CR is created by the Helm release (`uiPlugin.createUIPluginResource`).
 - **Tests repaired and expanded** to match current behavior, with global state reset between tests.
 
 ### v1.1.0
