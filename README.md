@@ -461,6 +461,12 @@ kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/health
 
 ## Changelog
 
+### v1.3.1 — Fix: VMs not shutting down
+
+- **Correct VM shutdown mechanism**: the service previously deleted `virt-launcher` pods, which does **not** stop a KubeVirt/Harvester VM — the controller recreates the VMI and the VM keeps running. It now **stops the owning VirtualMachine** (`runStrategy: Halted` / `running: false`, i.e. a graceful ACPI guest shutdown that doesn't restart), deletes standalone VMIs, and force-deletes any straggler virt-launcher pods only after the timeout.
+- **RBAC**: added `get/list/patch/update` on `kubevirt.io/virtualmachines` and `delete` on `virtualmachineinstances` (still least-privilege).
+- Note: stopped VMs stay **Halted** after the node powers back on (they won't auto-start) — start them from the Harvester UI or automation if desired.
+
 ### v1.3.0 — Token console & live token reload
 
 - **Standalone token console**: a self-contained, network-restricted web UI (`node-shutdown-console`) to set/rotate the auth token, served from the API image on its own NodePort (default `30089`). Works on any Harvester — no Rancher UI-extension framework required. Runs unprivileged with a ServiceAccount scoped to write only the `node-shutdown-auth` Secret. **Unauthenticated by design — restrict its NodePort to a trusted management subnet.**
