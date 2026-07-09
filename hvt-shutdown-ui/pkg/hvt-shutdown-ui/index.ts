@@ -1,5 +1,6 @@
 import { importTypes } from '@rancher/auto-import';
-import { IPlugin, TabLocation } from '@shell/core/types';
+import { IPlugin } from '@shell/core/types';
+import extensionRouting from './routing/extension-routing';
 
 // Init the package
 export default function(plugin: IPlugin): void {
@@ -9,22 +10,10 @@ export default function(plugin: IPlugin): void {
   // Provide plugin metadata from package.json
   plugin.metadata = require('./package.json');
 
-  // Load a product
-  // plugin.addProduct(require('./product'));
+  // Register a top-level product (adds a nav menu item + its own page) instead of
+  // an add-on tab — Harvester's add-on config page does not host injected tabs.
+  plugin.addProduct(require('./product'));
 
-  // Register the custom Add-on tab for node-shutdown
-  plugin.addTab(
-    TabLocation.RESOURCE_DETAIL_PAGE,
-    {
-      resource: ['harvesterhci.io.addon'],
-      mode: ['edit'],
-      id: ['node-shutdown']
-    },
-    {
-      name: 'node-shutdown-config',
-      label: 'Node Shutdown Configuration',
-      weight: 100,
-      component: () => import('./components/NodeShutdownConfig.vue')
-    }
-  );
+  // Register the page route(s) for the product.
+  plugin.addRoutes(extensionRouting);
 }
