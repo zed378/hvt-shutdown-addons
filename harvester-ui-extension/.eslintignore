@@ -1,0 +1,17 @@
+assets/fonts
+coverage
+.nyc_output
+node_modules/
+.npm
+.eslintcache
+.env
+.cache
+.next
+.nuxt
+dist
+dist-pkg
+.DS_Store
+pkg/harvester/index.ts
+pkg/harvester/store/*
+scripts/pkgfile.js
+tmp
