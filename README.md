@@ -22,12 +22,23 @@ This service runs as a DaemonSet on each node in a Harvester cluster. It exposes
 
 - **Bearer Token Authentication**: All shutdown requests require a strong Bearer token via `AUTH_TOKEN` environment variable
 - **Constant-time Comparison**: Uses `secrets.compare_digest()` to prevent timing attacks
-- **Empty Token Protection**: Returns 500 if `AUTH_TOKEN` is not configured
+- **No Credential Leakage**: Failed attempts are logged without echoing any token material
+- **Consistent 401**: Both missing and invalid tokens return `401` (never a partial-info `403`)
+- **Fail-closed Default**: `auth.token` ships empty. If left empty the chart generates a strong random token at install time (readable from the `node-shutdown-auth` Secret); the known default token that previously shipped is now actively rejected at install time
 
 ### Rate Limiting
 
-- **Sliding Window Algorithm**: Configurable requests per minute (default: 10)
-- **Returns HTTP 429**: When rate limit is exceeded
+- **Per-Client Sliding Window**: Configurable requests per minute (default: 10), keyed per client IP
+- **Applied After Authentication**: Enforced only for authenticated requests, so unauthenticated or failed traffic can never throttle a real emergency (UPS-triggered) shutdown
+- **Returns HTTP 429**: When a client exceeds its own budget
+
+### API Surface Reduction
+
+- **Docs Disabled by Default**: `/docs`, `/redoc`, and `/openapi.json` are disabled unless `ENABLE_DOCS=true`, avoiding disclosure of the privileged API surface
+
+### Least-Privilege RBAC
+
+- **Pods-Only Access**: The service account can only read VM instances and `get`/`list`/`delete` pods. It can no longer delete nodes/namespaces/events or patch pod status
 
 ### Concurrent Shutdown Protection
 
@@ -55,7 +66,6 @@ API base URL (example):
 
 ### Container Security
 
-- **Non-root User**: Dockerfile includes `appuser` for non-root execution
 - **Minimal Base Image**: Uses `python:3.11-slim` to reduce attack surface
 - **Dropped Capabilities**: All Linux capabilities dropped by default
 
@@ -89,6 +99,10 @@ docker build -t your-registry/hvt-shutdown:latest .
 docker push your-registry/hvt-shutdown:latest
 ```
 
+The Docker image includes:
+
+- Python FastAPI backend on port 8080
+
 ### 5. Package and Publish Helm Chart
 
 Each platform has a dedicated script in the `scripts/` directory:
@@ -96,24 +110,15 @@ Each platform has a dedicated script in the `scripts/` directory:
 **Linux/macOS (bash):**
 
 ```bash
-chmod +x scripts/publish_chart.sh
-./scripts/publish_chart.sh
-```
-
-**macOS (zsh):**
-
-```bash
-chmod +x scripts/publish_chart.mac.sh
-./scripts/publish_chart.mac.sh
+chmod +x scripts/publish_to_github.sh
+./scripts/publish_to_github.sh
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-.\scripts\publish_chart.ps1
+.\scripts\publish_to_github.ps1
 ```
-
-The script creates `charts-output/` directory with the packaged `.tgz` chart and `index.yaml`. Edit `charts-output/index.yaml` and replace the placeholder URL with your actual serving URL.
 
 ### 6. Update Addon Configuration
 
@@ -121,7 +126,7 @@ Edit `Charts/addon.yaml` and update the repo URL:
 
 ```yaml
 spec:
-  repo: "https://your-registry.example.com/charts" # Your chart repository URL
+  repo: "https://zed378.github.io/hvt-shutdown-addons/" # Your chart repository URL
 ```
 
 ### 7. Install as Harvester Add-on
@@ -134,13 +139,16 @@ kubectl apply -f Charts/addon.yaml
 kubectl patch addon node-shutdown -n harvester-system --type=json -p '[{"op": "replace", "path": "/spec/enabled", "value": true}]'
 ```
 
-Once enabled, the Add-on's bundled Harvester UI extension is automatically injected into the Harvester Dashboard.
+To configure your Authentication Token, set `auth.token` before (or after) enabling the add-on:
 
-To configure your Authentication Token:
+- **Before install**: edit `auth.token` in `Charts/addon.yaml` (under `valuesContent`) or `Charts/values.yaml`.
+- **In the Harvester UI**: navigate to **Advanced -> Addons**, click **Edit Config** on the `node-shutdown` addon, and set `auth.token` in the values YAML editor, then Save.
 
-1. Navigate to **Advanced -> Addons** in your Harvester UI.
-2. Click **Edit Config** on the `node-shutdown` addon.
-3. You will see a custom graphical interface! Enter your secure token into the **Authentication Token** field and click Save.
+If `auth.token` is left empty, the chart generates a strong random token at install time — read it back from the `node-shutdown-auth` Secret:
+
+```bash
+kubectl get secret node-shutdown-auth -n harvester-system -o jsonpath='{.data.auth-token}' | base64 -d
+```
 
 ### 8. Access the API via NodePort
 
@@ -251,7 +259,7 @@ All values are in `Charts/values.yaml`:
 
 | Variable                            | Description                               | Default        |
 | ----------------------------------- | ----------------------------------------- | -------------- |
-| `auth.token`                        | Bearer token for API authentication       | **(required)** |
+| `auth.token`                        | Bearer token for API authentication (set here or via the add-on config; empty = auto-generated random token, fails closed) | `""` |
 | `image.registry`                    | Docker image registry                     | zed378         |
 | `image.repository`                  | Docker image name                         | hvt-shutdown   |
 | `image.tag`                         | Docker image tag                          | latest         |
@@ -260,16 +268,56 @@ All values are in `Charts/values.yaml`:
 | `rateLimiting.maxRequestsPerMinute` | Rate limit threshold                      | 10             |
 | `auditLogging.enabled`              | Enable audit logging                      | true           |
 | `networkPolicy.enabled`             | Enable Kubernetes NetworkPolicy           | false          |
-| `uiPlugin.createUIPluginResource`   | Auto-create UIPlugin after endpoint ready | true           |
+| `networkPolicy.ingressFromCidr`     | Restrict API ingress to this source CIDR  | null           |
+| `tls.enabled`                       | Serve the API over HTTPS (and use HTTPS for peer calls) | false |
+| `tls.secretName`                    | Existing TLS secret (`tls.crt`/`tls.key`); empty = chart self-signs | "" |
+| `tls.peerVerify`                    | Verify peer certificates during coordination | false      |
+
+Environment-only knobs (not Helm values): `ENABLE_DOCS` (default `false`) re-enables `/docs` and `/openapi.json`.
+
+## Transport Security (TLS)
+
+By default the API is served over plain HTTP on the NodePort. To encrypt the API
+and all peer-to-peer coordination traffic (the bearer token is otherwise sent in
+clear text), enable TLS:
+
+```yaml
+tls:
+  enabled: true
+  # Leave secretName empty to let the chart generate a self-signed cert, or
+  # point at an existing kubernetes.io/tls secret (e.g. from cert-manager).
+  secretName: ""
+  peerVerify: false   # self-signed per-node certs => leave false; token still enforced
+```
+
+When enabled, the health probes automatically switch to the `HTTPS` scheme, the
+cert/key are mounted read-only at `/etc/tls`, and clients must use `https://VIP:30088`.
+For a publicly trusted cert, front the NodePort with an ingress/load-balancer that
+terminates TLS instead.
+
+## Restricting Access (NetworkPolicy & firewall)
+
+> **Important:** this DaemonSet runs with `hostNetwork: true`. Kubernetes
+> NetworkPolicy generally does **not** apply to hostNetwork pods, so the
+> authoritative control is a **host firewall** rule on each node (allow TCP
+> `30088` only from your management subnet). The chart's NetworkPolicy is
+> defense-in-depth for CNIs that enforce it:
+
+```yaml
+networkPolicy:
+  enabled: true
+  ingressFromCidr: "10.0.0.0/8"   # only this source range may reach the API port
+```
 
 ## Security Best Practices
 
 1. **Generate Strong Tokens**: Always use `openssl rand -hex 32` or similar for auth tokens
-2. **Enable NetworkPolicy**: Set `networkPolicy.enabled: true` to restrict access
-3. **Restrict NodePort**: Use firewall rules to limit access to NodePort range
-4. **Monitor Audit Logs**: Regularly review `/var/log/shutdown-audit.log`
-5. **Rotate Tokens**: Periodically change `AUTH_TOKEN` and update the Kubernetes secret
-6. **Use TLS**: Deploy with an ingress controller that provides TLS termination
+2. **Restrict at the Host Firewall**: Limit NodePort `30088` to your management subnet (authoritative for hostNetwork)
+3. **Enable NetworkPolicy** where your CNI enforces it: `networkPolicy.enabled: true` + `ingressFromCidr`
+4. **Enable TLS**: Set `tls.enabled: true`, or terminate TLS at an ingress/load-balancer
+5. **Monitor Audit Logs**: Regularly review `/var/log/shutdown-audit.log`
+6. **Rotate Tokens**: Periodically change `auth.token` (in the add-on config / chart values) — it updates the Kubernetes secret
+7. **Keep Docs Disabled**: Leave `ENABLE_DOCS=false` in production
 
 ## Testing
 
@@ -284,115 +332,10 @@ All scripts are located in the `scripts/` directory:
 
 | Script                          | Platform             | Description                                |
 | ------------------------------- | -------------------- | ------------------------------------------ |
-| `scripts/publish_chart.sh`      | Linux/macOS (bash)   | Package Helm chart and generate index.yaml |
-| `scripts/publish_chart.mac.sh`  | macOS (zsh)          | macOS-optimized chart publishing script    |
-| `scripts/publish_chart.ps1`     | Windows (PowerShell) | Windows chart publishing script            |
-| `scripts/publish_to_github.sh`  | Linux/macOS (bash)   | Publish chart to GitHub Pages as Helm repo |
-| `scripts/publish_to_github.ps1` | Windows (PowerShell) | Publish chart to GitHub Pages as Helm repo |
+| `scripts/publish_to_github.sh`  | Linux/macOS (bash)   | Publish Helm chart to GitHub Pages as repo |
+| `scripts/publish_to_github.ps1` | Windows (PowerShell) | Publish Helm chart to GitHub Pages as repo |
 | `scripts/create_release.sh`     | Linux/macOS (bash)   | Interactive GitHub release creator         |
 | `scripts/create_release.ps1`    | Windows (PowerShell) | Windows GitHub release creator             |
-
-### Creating a GitHub Release
-
-**Prerequisites:**
-
-- [Helm](https://helm.sh/docs/intro/install/) installed
-- [GitHub CLI](https://cli.github.com/) authenticated (`gh auth login`)
-
-**Linux/macOS:**
-
-```bash
-# Interactive mode (prompts for version)
-./scripts/create_release.sh
-
-# Or with specific version
-./scripts/create_release.sh 1.0.0 v1.0.0 "Initial release"
-
-# Create as draft or pre-release
-./scripts/create_release.sh 1.0.0 --draft
-./scripts/create_release.sh 1.0.0 --prerelease
-```
-
-**Windows:**
-
-```powershell
-# Interactive mode
-.\scripts\create_release.ps1
-
-# Or with specific version
-.\scripts\create_release.ps1 -Version "1.0.0" -Message "Initial release"
-```
-
-The script will:
-
-1. Package the Helm chart into `charts-output/*.tgz`
-2. Generate `index.yaml` for the Helm repository
-3. Create a compressed archive of the repository state:
-   - **Linux/macOS**: `hvt-shutdown-addons-{version}.tar.gz`
-   - **Windows**: `hvt-shutdown-addons-{version}.zip`
-4. Place all artifacts in `releases/` directory
-5. Provide the `gh release create` command to upload artifacts to GitHub
-
-### Release Artifacts
-
-Each release includes the following files in the `releases/` directory:
-
-| File                                   | Description                             |
-| -------------------------------------- | --------------------------------------- |
-| `hvt-shutdown-addons-{version}.tar.gz` | Compressed source archive (Linux/macOS) |
-| `hvt-shutdown-addons-{version}.zip`    | Compressed source archive (Windows)     |
-| `hvt-shutdown-addons-{version}.tgz`    | Packaged Helm chart                     |
-| `index.yaml`                           | Helm repository index                   |
-
-### Publishing Helm Chart to GitHub as Helm Repository
-
-GitHub can serve as your Helm chart repository using GitHub Pages.
-
-**Prerequisites:**
-
-1. Enable GitHub Pages for this repository:
-   - Go to **Settings → Pages**
-   - Set **Source** to `GitHub Actions` or `Branch`
-   - Select the `pages` branch and `/ (root)` folder
-   - Click **Save**
-
-2. Authenticate GitHub CLI:
-   ```bash
-   gh auth login
-   ```
-
-**Linux/macOS:**
-
-```bash
-# Publish to GitHub (uses origin URL by default)
-./scripts/publish_to_github.sh
-
-# Or specify repository and branch
-./scripts/publish_to_github.sh https://github.com/username/hvt-shutdown-addons.git pages
-```
-
-**Windows:**
-
-```powershell
-# Publish to GitHub (uses origin URL by default)
-.\scripts\publish_to_github.ps1
-
-# Or specify repository and branch
-.\scripts\publish_to_github.ps1 -GithubRepo "https://github.com/username/hvt-shutdown-addons.git" -Branch "pages"
-```
-
-**After publishing, install the chart:**
-
-```bash
-# Add the repository
-helm repo add hvt-shutdown https://yourusername.github.io/hvt-shutdown-addons
-
-# Update repository
-helm repo update
-
-# Install the chart
-helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system
-```
 
 ## Troubleshooting
 
@@ -415,26 +358,29 @@ kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/health
 
 ## Changelog
 
+### v1.2.0 — Security hardening
+
+- **Fixed dead default-token guard**: the Helm pre-install check compared `auth.token` against a base64 string that never matched the plaintext token it shipped, so a publicly known default token installed silently. The guard now compares the correct plaintext value and fails the install if it is used.
+- **Removed committed token**: `values.yaml` and `addon.yaml` no longer ship a real token; `auth.token` defaults to empty and fails closed (auto-generated random token).
+- **Rate limiting moved after authentication and made per-IP**: failed/unauthenticated requests can no longer consume the shutdown budget and lock out an emergency shutdown.
+- **No credential leakage in logs**; missing tokens now return a consistent `401`.
+- **Least-privilege RBAC**: dropped `delete` on nodes/namespaces/events, unused `pods/status` patch, and `uiplugins` write access.
+- **API docs disabled by default** (`ENABLE_DOCS=true` to re-enable).
+- **Dependencies pinned** with upper bounds; unused `python-multipart`/`python-dateutil` removed. Dockerfile hygiene improvements.
+- **Optional TLS**: `tls.enabled: true` serves the API over HTTPS and encrypts peer-to-peer coordination calls; chart self-signs or accepts a bring-your-own secret; probes switch to the HTTPS scheme automatically.
+- **NetworkPolicy source-CIDR restriction** wired in via `networkPolicy.ingressFromCidr` (with a documented hostNetwork caveat).
+- **Removed the bundled Vue UI plugin**: the `hvt-shutdown-ui` extension, its container image (`Dockerfile.ui`), the `uiPlugin` Helm values, and the `UIPlugin`/Deployment/Service/init-job resources are all gone. Configure the auth token via the add-on config or chart values instead. This shrinks the deployed footprint and RBAC surface.
+- **Tests repaired and expanded** to match current behavior, with global state reset between tests.
+
 ### v1.1.0
 
-- **Harvester UI Extension Integration**: Automatically deploys a custom Vue.js frontend extension into the Harvester dashboard when the addon is enabled. This provides a rich, native graphical interface for configuring the Authentication Token instead of relying on raw YAML editing.
-- **Enhanced Architecture Visuals**: Replaced previous architecture diagram with a high-quality SVG vector graphic.
-- **Automated UI Builds**: The GitHub publishing scripts now seamlessly build and bundle the UI extension tarball alongside the Helm chart.
-- **UIPlugin Resource Support**: Added UIPlugin custom resource for proper Rancher UI Extensions integration.
-- **Static File Server on Port 8081**: Built-in FastAPI static file server serves UI extension assets on port 8081 for UIPlugin loading.
-- **Docker Build Optimization**: Improved Dockerfile to properly copy UI extension files (package.json, JS bundles) to the correct static serving directory.
-- **ClusterIP Service for UIPlugin**: Changed from headless service to automatic ClusterIP allocation for reliable UIPlugin endpoint routing.
-- **Init Job for UIPlugin Creation**: Added Helm hook job that waits for the static file server endpoint to be available before creating the UIPlugin CR, preventing the UI plugin from getting stuck in "enabling" state.
-- **Conditional UIPlugin Creation**: Added `uiPlugin.createUIPluginResource` flag to control whether the UIPlugin CR is created automatically.
+- **UI Plugin Built into Docker Image**: UI static files are built during Docker build and served internally on port 8081
+- **UI Plugin Endpoint**: Uses `http://localhost:8081` via hostNetwork for UI serving
+- **UIPlugin Resource Support**: Added UIPlugin custom resource for proper Rancher UI Extensions integration
+- **ClusterIP Service for UIPlugin**: Automatic ClusterIP allocation for reliable UIPlugin endpoint routing
+- **Cluster-wide Shutdown Coordination**: Added peer-to-peer shutdown via HTTP POST to all DaemonSet pods
+- **RBAC Enhancements**: Added nodes, events, namespaces, and pods/status permissions for coordinated shutdown
 
-## UI Plugin Deployment Flow
+## License
 
-The UI plugin uses a deferred creation approach to ensure reliable deployment:
-
-1. **Helm Install** → Creates DaemonSet + ClusterIP Service
-2. **Helm Hook (post-install)** → Init Job starts and polls the endpoint
-3. **Pod Ready** → Static file server responds on port 8081
-4. **Init Job Verifies** → Confirms `package.json` is accessible
-5. **UIPlugin CR Created** → Rancher UI Extensions picks up the extension automatically
-
-This ensures the Rancher UI can always fetch the UI plugin metadata when the UIPlugin is created, eliminating the common "stuck in enabling state" issue.
+[MIT License](LICENSE)
