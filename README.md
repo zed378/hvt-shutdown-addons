@@ -316,6 +316,68 @@ token takes effect on every node within ~1 minute — no pod restart, no extra R
 > to a trusted management subnet with a host firewall (same guidance as the API port).
 > Disable it entirely with `tokenConsole.enabled: false` if you don't want it.
 
+## UI Extension — testing & distribution
+
+The Harvester dashboard tab (`hvt-shutdown-ui`) is a Rancher UI extension. There are
+three ways it can reach the dashboard, from fastest-to-verify to fully-published:
+
+### 1. Developer Load (fastest — no publishing, no caching)
+
+The quickest way to confirm the extension actually renders in your dashboard. It
+loads the built bundle **client-side**, bypassing the container image, the `UIPlugin`
+CR, and Rancher's plugin-caching entirely:
+
+```bash
+# Linux/macOS
+./scripts/serve_extension.sh
+# Windows
+.\scripts\serve_extension.ps1
+```
+
+This builds the package and serves it at `http://127.0.0.1:4500/...` (the script
+prints the exact `…/hvt-shutdown-ui-<ver>.umd.min.js` URL). Then in the dashboard:
+
+1. Avatar → **Preferences** → enable **Extension developer features**.
+2. **Extensions** → three-dot menu → **Developer load**.
+3. Paste the printed URL and **Load**.
+
+Because the load is client-side, run the script on the **same machine you browse the
+dashboard from** (the browser must reach `127.0.0.1:4500`). If the **Node Shutdown
+Configuration** tab appears on the add-on's Edit Config screen, the extension code is
+correct and the only remaining question is distribution/caching.
+
+### 2. Official distribution — as a Rancher Extension repository (recommended)
+
+The supported production path is to publish the extension as a **Helm chart repo** and
+add it under **Extensions → Manage Repositories** in the dashboard — Rancher then
+installs *and caches* it for you (unlike a hand-created `UIPlugin`). From the extension
+project:
+
+```bash
+# needs git + push credentials; the target branch must already exist
+cd hvt-shutdown-ui
+yarn install
+yarn publish-pkgs -s <org>/<extension-repo> -b gh-pages
+```
+
+Then in Rancher: **Extensions → ⋮ → Manage Repositories → Create**, and enter
+`https://<org>.github.io/<extension-repo>` with branch `gh-pages`.
+
+> **Caveats for this repo:** `publish-pkgs` needs `git`, an **existing** target branch,
+> and push credentials, and it produces a Helm repo that needs its **own** GitHub Pages
+> site. This repo's `pages` branch already serves the *add-on* chart repo, so publish
+> the **extension** repo to a **separate GitHub repository** (or a Pages subpath) to
+> avoid a collision. Requires **UI Extensions enabled** in the dashboard.
+
+### 3. Bundled `UIPlugin` (what the chart ships today)
+
+The chart also deploys the extension as an in-cluster container + `UIPlugin` CR pointing
+at an internal DNS endpoint (`uiPlugin.*` values). This is the air-gapped/manual path and
+**only works if Rancher's plugin-caching controller is active** (UI Extensions enabled).
+If the `UIPlugin` shows an empty `STATE` (never `cached`), that controller isn't running —
+use Developer Load (1) to verify the code, then the token console or an Extension
+repository (2) to actually ship it.
+
 ## Transport Security (TLS)
 
 By default the API is served over plain HTTP on the NodePort. To encrypt the API
@@ -405,6 +467,7 @@ kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/health
 - **Live token reload**: the API now reads the token from the mounted Secret file (`AUTH_TOKEN_FILE`) per request, so rotating it (via the console or `kubectl`) takes effect within ~1 minute **without restarting** the DaemonSet. Falls back to the `AUTH_TOKEN` env var when the file is absent.
 - **UI extension retained** alongside the console (Rancher UIPlugin tab), for environments where UI Extensions is enabled.
 - **UI extension serving fix**: the container now serves the extension bundle at the web root (flattened), so the manifest's `main` resolves and Rancher can cache the `UIPlugin` (previously it 404'd and never cached).
+- **Extension dev tooling**: `scripts/serve_extension.{sh,ps1}` build and serve the extension for Rancher **Developer Load** (Docker-based, no local Node) — the fastest way to verify the dashboard tab renders, independent of publishing/caching. See [UI Extension — testing & distribution](#ui-extension--testing--distribution).
 
 ### v1.2.0 — Security hardening
 
