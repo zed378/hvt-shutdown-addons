@@ -148,9 +148,10 @@ kubectl apply -f Charts/addon.yaml
 kubectl patch addon node-shutdown -n harvester-system --type=json -p '[{"op": "replace", "path": "/spec/enabled", "value": true}]'
 ```
 
-Once enabled, the bundled UI extension is loaded into the Harvester dashboard automatically. To configure your Authentication Token:
+There are three ways to configure the Authentication Token:
 
-- **In the Harvester UI (recommended)**: navigate to **Advanced -> Addons**, click **Edit Config** on the `node-shutdown` addon. The extension adds a **Node Shutdown Configuration** tab with an **Authentication Token** field — enter your token and Save. (Behind the scenes this writes `auth.token` into the addon's `valuesContent`.)
+- **Token Console (works on any Harvester)**: a standalone web page served on its own NodePort (default **30089**) — open `http://VIP:30089`, enter or generate a token, Save. It writes the `node-shutdown-auth` Secret and the change applies within ~1 minute **without restarting** the DaemonSet. See [Token Console](#token-console) below. ⚠ This page is unauthenticated — restrict NodePort 30089 to your management subnet.
+- **Harvester UI extension**: navigate to **Advanced -> Addons**, click **Edit Config** on the `node-shutdown` addon — the extension adds a **Node Shutdown Configuration** tab with an **Authentication Token** field. (Requires UI Extensions enabled in the Harvester dashboard.)
 - **Before install / via YAML**: edit `auth.token` in `Charts/addon.yaml` (under `valuesContent`) or `Charts/values.yaml`.
 
 If `auth.token` is left empty, the chart generates a strong random token at install time — read it back from the `node-shutdown-auth` Secret:
@@ -287,8 +288,33 @@ All values are in `Charts/values.yaml`:
 | `uiPlugin.endpoint`                 | Internal DNS endpoint Rancher loads the UI bundle from | `http://hvt-shutdown-ui.cattle-ui-plugin-system.svc:80` |
 | `uiPlugin.updateStrategy.maxUnavailable` | Rolling-update max unavailable pods (0 = zero-downtime) | 0 |
 | `uiPlugin.updateStrategy.maxSurge`  | Rolling-update surge pods (new pod runs alongside old) | 1 |
+| `tokenConsole.enabled`              | Deploy the standalone token console       | true           |
+| `tokenConsole.nodePort.nodePort`    | NodePort for the token console UI         | 30089          |
+| `tokenConsole.minTokenLength`       | Weak-token warning threshold in the UI    | 32             |
 
 Environment-only knobs (not Helm values): `ENABLE_DOCS` (default `false`) re-enables `/docs` and `/openapi.json`.
+
+## Token Console
+
+The **token console** is a self-contained web UI for setting/rotating the shutdown
+auth token that does **not** depend on the Rancher UI-extension framework — it works
+on any Harvester. It's served from the same API image as a separate, unprivileged
+`Deployment` (`node-shutdown-console`) with a ServiceAccount scoped to write only the
+`node-shutdown-auth` Secret, exposed on its own NodePort (default **30089**).
+
+```
+http://VIP:30089        # open in a browser, enter/generate a token, Save
+```
+
+How it applies without a restart: the DaemonSet mounts the `node-shutdown-auth`
+Secret as a file and the API reads the token from it **per request** (`AUTH_TOKEN_FILE`).
+When the console updates the Secret, the kubelet syncs the mounted file and the new
+token takes effect on every node within ~1 minute — no pod restart, no extra RBAC.
+
+> ⚠ **Security:** the console is intentionally **unauthenticated** and can change the
+> credential that gates cluster-wide shutdown. You **must** restrict NodePort `30089`
+> to a trusted management subnet with a host firewall (same guidance as the API port).
+> Disable it entirely with `tokenConsole.enabled: false` if you don't want it.
 
 ## Transport Security (TLS)
 
@@ -372,6 +398,13 @@ kubectl exec -n harvester-system <pod-name> -- curl http://localhost:8080/health
 ```
 
 ## Changelog
+
+### v1.3.0 — Token console & live token reload
+
+- **Standalone token console**: a self-contained, network-restricted web UI (`node-shutdown-console`) to set/rotate the auth token, served from the API image on its own NodePort (default `30089`). Works on any Harvester — no Rancher UI-extension framework required. Runs unprivileged with a ServiceAccount scoped to write only the `node-shutdown-auth` Secret. **Unauthenticated by design — restrict its NodePort to a trusted management subnet.**
+- **Live token reload**: the API now reads the token from the mounted Secret file (`AUTH_TOKEN_FILE`) per request, so rotating it (via the console or `kubectl`) takes effect within ~1 minute **without restarting** the DaemonSet. Falls back to the `AUTH_TOKEN` env var when the file is absent.
+- **UI extension retained** alongside the console (Rancher UIPlugin tab), for environments where UI Extensions is enabled.
+- **UI extension serving fix**: the container now serves the extension bundle at the web root (flattened), so the manifest's `main` resolves and Rancher can cache the `UIPlugin` (previously it 404'd and never cached).
 
 ### v1.2.0 — Security hardening
 
