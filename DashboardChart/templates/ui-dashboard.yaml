@@ -1,0 +1,111 @@
+{{- if .Values.uiDashboard.enabled }}
+{{- /* Effective TLS secret: explicit secretName wins; else the auto-copied Harvester cert (see dashboard-tls-copy.yaml); else the container self-signs from VIP. */ -}}
+{{- $tlsSecret := .Values.uiDashboard.tls.secretName }}
+{{- if and (not $tlsSecret) .Values.uiDashboard.tls.copyFrom.name }}
+{{-   $src := lookup "v1" "Secret" .Values.uiDashboard.tls.copyFrom.namespace .Values.uiDashboard.tls.copyFrom.name }}
+{{-   if and $src $src.data (index $src.data "tls.crt") (index $src.data "tls.key") }}
+{{-     $tlsSecret = printf "%s-tls" .Values.uiDashboard.name }}
+{{-   end }}
+{{- end }}
+# Custom Harvester dashboard (fork with the "Node Shutdown" menu) served over HTTPS
+# and exposed via NodePort. Point Harvester Settings -> UI -> ui-index at
+# https://<VIP>:{{ .Values.uiDashboard.nodePort.nodePort }}/dashboard/index.html
+# and set ui-source: External.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.uiDashboard.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.uiDashboard.name }}
+spec:
+  replicas: {{ .Values.uiDashboard.replicas | default 1 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.uiDashboard.updateStrategy.maxUnavailable }}
+      maxSurge: {{ .Values.uiDashboard.updateStrategy.maxSurge }}
+  selector:
+    matchLabels:
+      app: {{ .Values.uiDashboard.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.uiDashboard.name }}
+    spec:
+      containers:
+        - name: dashboard
+          image: "{{ .Values.uiDashboard.image.registry }}/{{ .Values.uiDashboard.image.repository }}:{{ .Values.uiDashboard.image.tag }}"
+          imagePullPolicy: {{ .Values.uiDashboard.image.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          env:
+            # Mode 1 (self-sign): the container signs a cert for this VIP on start.
+            {{- $vip := .Values.uiDashboard.vip }}
+            {{- if not $vip }}
+              {{- $vipSetting := lookup "harvesterhci.io/v1beta1" "Setting" "" "vip" }}
+              {{- if and $vipSetting $vipSetting.value }}
+                {{- $vip = $vipSetting.value }}
+              {{- end }}
+            {{- end }}
+            - name: VIP
+              value: {{ $vip | quote }}
+            - name: CERT_SANS
+              value: {{ .Values.uiDashboard.certSans | quote }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+{{ toYaml .Values.uiDashboard.resources | nindent 12 }}
+          {{- if $tlsSecret }}
+          volumeMounts:
+            # Mode 2 (mounted cert): Harvester's serving cert (auto-copied) or a BYO cert.
+            - name: tls
+              mountPath: /etc/nginx/certs
+              readOnly: true
+          {{- end }}
+      {{- if $tlsSecret }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ $tlsSecret }}
+      {{- end }}
+{{- if .Values.uiDashboard.nodePort.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.uiDashboard.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.uiDashboard.name }}
+spec:
+  type: NodePort
+  externalTrafficPolicy: {{ .Values.uiDashboard.nodePort.externalTrafficPolicy }}
+  selector:
+    app: {{ .Values.uiDashboard.name }}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.uiDashboard.nodePort.port }}
+      targetPort: {{ .Values.uiDashboard.nodePort.targetPort }}
+      nodePort: {{ .Values.uiDashboard.nodePort.nodePort }}
+      name: https
+{{- end }}
+{{- end }}

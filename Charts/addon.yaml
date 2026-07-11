@@ -12,7 +12,7 @@ spec:
   # Helm chart repository URL
   repo: "https://zed378.github.io/hvt-shutdown-addons/"
   # Chart version
-  version: "1.3.1"
+  version: "1.5.0"
   # Chart name (must match chart.yaml name)
   chart: node-shutdown
   # Values to pass to the Helm chart - will be merged with chart's values.yaml
@@ -59,6 +59,9 @@ spec:
         - apiGroups: ["kubevirt.io"]
           resources: ["virtualmachineinstances"]
           verbs: ["get", "list", "watch", "delete"]
+        - apiGroups: ["kubevirt.io"]
+          resources: ["virtualmachineinstancemigrations"]
+          verbs: ["get", "list", "create"]
         - apiGroups: [""]
           resources: ["pods"]
           verbs: ["get", "list", "delete"]
@@ -158,46 +161,19 @@ spec:
     # Max time to wait for VMs to fully shut down before baremetal poweroff (seconds)
     vmShutdownTimeout: 120
 
+    # Scheduled shutdown (set from the dashboard Node Shutdown page). nodes empty =
+    # whole cluster; vmStrategy = migrate | stop | force.
+    schedule:
+      enabled: false
+      cron: "0 2 * * *"
+      nodes: []
+      vmStrategy: "migrate"
+
     # Network policy (optional). NOTE: hostNetwork pods largely bypass
     # NetworkPolicy — use a host firewall on the node to restrict NodePort 30088.
     networkPolicy:
       enabled: false
       ingressFromCidr: null # e.g. "10.0.0.0/8"
-
-    # Rancher UIPlugin configuration.
-    # The UI extension is served from a separate in-cluster container image and
-    # loaded by Rancher/Harvester via the internal ClusterIP service DNS endpoint
-    # below (NOT GitHub Pages).
-    uiPlugin:
-      enabled: true
-      createUIPluginResource: true
-      name: hvt-shutdown-ui
-      namespace: cattle-ui-plugin-system
-      image:
-        registry: "zed378"
-        repository: "hvt-shutdown-ui"
-        tag: "latest"
-        pullPolicy: "Always"
-      pluginName: hvt-shutdown-ui
-      pluginVersion: "1.2.0"
-      endpoint: "http://hvt-shutdown-ui.cattle-ui-plugin-system.svc:80"
-      noCache: false
-      service:
-        port: 80
-      replicas: 1
-      # Zero-downtime rolling update: keep the old pod serving until the new
-      # one is Ready (maxUnavailable: 0) and surge the new pod alongside it.
-      updateStrategy:
-        maxUnavailable: 0
-        maxSurge: 1
-        minReadySeconds: 0
-      resources:
-        limits:
-          cpu: "100m"
-          memory: "64Mi"
-        requests:
-          cpu: "50m"
-          memory: "32Mi"
 
     # Standalone token console (network-restricted, UNAUTHENTICATED). Sets/rotates
     # the shutdown auth token from a simple web page on its own NodePort, without

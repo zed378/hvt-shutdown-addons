@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -399,29 +400,49 @@ async def execute_shutdown(request: Request, all_nodes: str = None):
             )
         _shutdown_in_progress = True
 
+    # Optional JSON body:
+    #   {"nodes": ["node-a", ...], "vmStrategy": "stop|migrate|force"}
+    # nodes empty/absent  => whole cluster (current behaviour).
+    # nodes given          => only those nodes are shut down (selected-node shutdown).
+    # vmStrategy (default "force"): how each shutting-down node handles its VMs.
+    req_body = {}
+    try:
+        raw = await request.body()
+        if raw:
+            req_body = json.loads(raw)
+    except Exception:
+        req_body = {}
+    target_nodes = req_body.get("nodes") or []
+    vm_strategy = str(req_body.get("vmStrategy") or "force").lower()
+    if vm_strategy not in ("stop", "migrate", "force"):
+        vm_strategy = "force"
+
     # Determine if this is an internal peer call (all_nodes=false) or user request
     is_peer_call = all_nodes == "false"
 
     if is_peer_call:
-        # Internal call from another node: only shut down locally
-        logger.info("Internal shutdown call from peer node — performing local shutdown only")
+        # Internal call from another node: only shut down locally, with the strategy.
+        logger.info(f"Internal shutdown call from peer — local shutdown only (vmStrategy={vm_strategy})")
         thread = threading.Thread(
             target=run_shutdown_sequence,
-            args=(None,),  # No peer IPs needed for local-only shutdown
+            args=(None, vm_strategy),
             daemon=True,
             name="shutdown-daemon",
         )
         thread.start()
     else:
-        # User request: cluster-wide shutdown
-        logger.info("Cluster-wide shutdown requested")
-        task = asyncio.create_task(coordinate_cluster_shutdown())
+        # User request: cluster-wide, or selected nodes when target_nodes is given.
+        scope = "cluster-wide" if not target_nodes else f"nodes={target_nodes}"
+        logger.info(f"Shutdown requested ({scope}, vmStrategy={vm_strategy})")
+        task = asyncio.create_task(coordinate_cluster_shutdown(target_nodes, vm_strategy))
         # Retain a reference so the task isn't garbage-collected mid-flight.
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
 
     return {
-        "status": "Shutdown sequence initiated" if is_peer_call else "Cluster-wide shutdown sequence initiated",
+        "status": "Shutdown sequence initiated",
+        "scope": "local" if is_peer_call else ("cluster" if not target_nodes else "selected"),
+        "vmStrategy": vm_strategy,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
@@ -438,10 +459,10 @@ def check_ip_online(ip: str) -> bool:
         return False
 
 
-def run_shutdown_sequence(peer_ips: list[str] = None):
+def run_shutdown_sequence(peer_ips: list[str] = None, vm_strategy: str = "force"):
     """Run the full shutdown sequence in a background daemon thread."""
     try:
-        _graceful_vm_shutdown()
+        _graceful_vm_shutdown(vm_strategy)
 
         if peer_ips:
             # Wait for peers to go offline before powering off this node
@@ -472,15 +493,17 @@ def run_shutdown_sequence(peer_ips: list[str] = None):
             _shutdown_in_progress = False
 
 
-def call_shutdown_on_node(ip: str):
-    """Trigger shutdown on a peer node via HTTP POST request using standard urllib."""
+def call_shutdown_on_node(ip: str, vm_strategy: str = "force"):
+    """Trigger local shutdown on a peer node, passing the VM strategy."""
     url = f"{PEER_SCHEME}://{ip}:{NODE_PORT}/system/shutdown?all_nodes=false"
-    logger.info(f"Sending shutdown request to peer node at {url}")
+    logger.info(f"Sending shutdown request to peer node at {url} (vmStrategy={vm_strategy})")
+    payload = json.dumps({"vmStrategy": vm_strategy}).encode("utf-8")
     req = urllib.request.Request(
         url,
         method="POST",
+        data=payload,
         headers={
-            "Authorization": f"Bearer {AUTH_TOKEN}",
+            "Authorization": f"Bearer {_current_token()}",
             "Content-Type": "application/json"
         }
     )
@@ -492,9 +515,16 @@ def call_shutdown_on_node(ip: str):
         logger.error(f"Failed to trigger shutdown on peer node at {ip}: {e}")
 
 
-async def coordinate_cluster_shutdown():
-    """Coordinated shutdown across all nodes by calling the webhook DaemonSet endpoints."""
-    logger.info("Coordinating shutdown across all nodes...")
+async def coordinate_cluster_shutdown(target_nodes: list[str] = None, vm_strategy: str = "force"):
+    """Coordinate shutdown across nodes.
+
+    target_nodes empty/None => whole cluster. Otherwise only the listed nodes are
+    shut down (selected-node shutdown), and this coordinator only powers itself off
+    if it is one of the targets. vm_strategy is forwarded to every node.
+    """
+    target_nodes = target_nodes or []
+    self_is_target = (not target_nodes) or (NODE_NAME in target_nodes)
+    logger.info(f"Coordinating shutdown (targets={target_nodes or 'ALL'}, vmStrategy={vm_strategy}, self_target={self_is_target})")
     peer_ips = []
     try:
         namespace = "harvester-system"
@@ -516,10 +546,13 @@ async def coordinate_cluster_shutdown():
             node_name = pod.spec.node_name
             if not pod_ip or node_name == NODE_NAME:
                 continue
+            # When targeting specific nodes, only call those peers.
+            if target_nodes and node_name not in target_nodes:
+                continue
 
             logger.info(f"Adding peer node {node_name} (IP: {pod_ip}) to shutdown queue")
             peer_ips.append(pod_ip)
-            tasks.append(asyncio.to_thread(call_shutdown_on_node, pod_ip))
+            tasks.append(asyncio.to_thread(call_shutdown_on_node, pod_ip, vm_strategy))
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -530,15 +563,21 @@ async def coordinate_cluster_shutdown():
     except Exception as e:
         logger.error(f"Error during cluster shutdown coordination: {e}")
     finally:
-        # Finally, start the shutdown sequence on this node, passing the peer IPs to wait for
-        logger.info(f"Initiating local VM shutdown phase on {NODE_NAME}")
-        thread = threading.Thread(
-            target=run_shutdown_sequence,
-            args=(peer_ips,),
-            daemon=True,
-            name="shutdown-daemon",
-        )
-        thread.start()
+        if self_is_target:
+            logger.info(f"Initiating local VM shutdown phase on {NODE_NAME}")
+            thread = threading.Thread(
+                target=run_shutdown_sequence,
+                args=(peer_ips, vm_strategy),
+                daemon=True,
+                name="shutdown-daemon",
+            )
+            thread.start()
+        else:
+            # Coordinator is not a target — orchestrate only, do not power off self.
+            logger.info(f"Node {NODE_NAME} is not a shutdown target; not powering off self.")
+            global _shutdown_in_progress
+            with _shutdown_lock:
+                _shutdown_in_progress = False
 
 
 def _list_virt_launchers_on_node():
@@ -587,21 +626,131 @@ def _force_kill_vms_on_node() -> int:
     return killed
 
 
-def _graceful_vm_shutdown():
-    """Force-stop all VM workloads on this node, then proceed to baremetal poweroff.
+def _wait_for_no_virt_launchers(timeout_s: int) -> bool:
+    """Wait until no running virt-launcher pods remain on this node (best effort)."""
+    start = time.time()
+    while time.time() - start < timeout_s:
+        try:
+            remaining = _list_virt_launchers_on_node()
+        except Exception:
+            remaining = []
+        if not remaining:
+            return True
+        logger.info(f"Waiting for {len(remaining)} VM(s) to leave node {NODE_NAME}...")
+        time.sleep(5)
+    return False
 
-    No grace period, no waiting — virt-launcher pods are killed immediately
-    (grace_period_seconds=0). Execution proceeds straight to _host_poweroff().
+
+def _stop_vms_on_node():
+    """Gracefully stop the VirtualMachines whose VMI runs on this node.
+
+    Patches each owning VirtualMachine to Halted / running=false (ACPI guest
+    shutdown, no restart); standalone VMIs are deleted. Waits for the
+    virt-launcher pods to terminate.
     """
-    logger.info(f"Force VM shutdown starting on node {NODE_NAME}")
+    custom = client.CustomObjectsApi()
     try:
-        killed = _force_kill_vms_on_node()
-        if killed == 0:
-            logger.info("No VM workloads found on this node — proceeding to poweroff")
+        vmis = custom.list_cluster_custom_object(
+            "kubevirt.io", "v1", "virtualmachineinstances"
+        ).get("items", [])
+    except Exception as e:
+        logger.error(f"Failed to list VMIs: {e}")
+        vmis = []
+    on_node = [v for v in vmis if v.get("status", {}).get("nodeName") == NODE_NAME]
+    if not on_node:
+        logger.info(f"No VMs on node {NODE_NAME}")
+        return
+    logger.info(f"Gracefully stopping {len(on_node)} VM(s) on node {NODE_NAME}")
+    for vmi in on_node:
+        name = vmi["metadata"]["name"]
+        ns = vmi["metadata"]["namespace"]
+        try:
+            vm = custom.get_namespaced_custom_object("kubevirt.io", "v1", ns, "virtualmachines", name)
+            spec = vm.get("spec", {})
+            if "runStrategy" in spec:
+                patch = [{"op": "add", "path": "/spec/runStrategy", "value": "Halted"}]
+            else:
+                patch = [{"op": "add", "path": "/spec/running", "value": False}]
+            custom.patch_namespaced_custom_object("kubevirt.io", "v1", ns, "virtualmachines", name, patch)
+            logger.info(f"Requested stop of VM {ns}/{name}")
+        except Exception as e:
+            if getattr(e, "status", None) == 404:
+                try:
+                    custom.delete_namespaced_custom_object(
+                        "kubevirt.io", "v1", ns, "virtualmachineinstances", name,
+                        grace_period_seconds=GRACE_PERIOD_SECONDS)
+                    logger.info(f"Deleted standalone VMI {ns}/{name}")
+                except Exception as de:
+                    logger.error(f"Failed to delete VMI {ns}/{name}: {de}")
+            else:
+                logger.error(f"Failed to stop VM {ns}/{name}: {e}")
+    _wait_for_no_virt_launchers(max(VM_SHUTDOWN_TIMEOUT, 60))
+
+
+def _migrate_vms_off_node():
+    """Live-migrate VMs off this node to surviving nodes; stop the ones that can't.
+
+    Creates a VirtualMachineInstanceMigration per VMI on this node, waits for them
+    to leave, then falls back to a graceful stop for any remainder (e.g. no
+    eligible target). Intended for selected-node shutdown where other nodes stay up.
+    """
+    custom = client.CustomObjectsApi()
+    try:
+        vmis = custom.list_cluster_custom_object(
+            "kubevirt.io", "v1", "virtualmachineinstances"
+        ).get("items", [])
+    except Exception as e:
+        logger.error(f"Failed to list VMIs: {e}")
+        vmis = []
+    on_node = [v for v in vmis if v.get("status", {}).get("nodeName") == NODE_NAME]
+    if not on_node:
+        logger.info(f"No VMs to migrate off node {NODE_NAME}")
+        return
+    logger.info(f"Live-migrating {len(on_node)} VM(s) off node {NODE_NAME}")
+    for vmi in on_node:
+        name = vmi["metadata"]["name"]
+        ns = vmi["metadata"]["namespace"]
+        migration = {
+            "apiVersion": "kubevirt.io/v1",
+            "kind": "VirtualMachineInstanceMigration",
+            "metadata": {"generateName": f"evict-{name}-"},
+            "spec": {"vmiName": name},
+        }
+        try:
+            custom.create_namespaced_custom_object(
+                "kubevirt.io", "v1", ns, "virtualmachineinstancemigrations", migration)
+            logger.info(f"Started migration of VMI {ns}/{name}")
+        except Exception as e:
+            logger.error(f"Failed to start migration for {ns}/{name}: {e}")
+    if _wait_for_no_virt_launchers(max(VM_SHUTDOWN_TIMEOUT, 120)):
+        logger.info("All VMs migrated off the node")
+        return
+    logger.warning("Some VMs did not migrate in time — stopping the remainder")
+    try:
+        _stop_vms_on_node()
+    except Exception as e:
+        logger.error(f"Fallback stop failed: {e}")
+
+
+def _graceful_vm_shutdown(vm_strategy: str = "force"):
+    """Handle this node's VM workloads per the chosen strategy, then poweroff.
+
+    - "force"   : force-kill virt-launcher pods immediately (grace 0). Fastest.
+    - "stop"    : gracefully stop the owning VirtualMachines (ACPI, no restart).
+    - "migrate" : live-migrate VMs to surviving nodes; stop the ones that can't.
+    Execution always proceeds to _host_poweroff() afterwards.
+    """
+    logger.info(f"VM shutdown phase (strategy={vm_strategy}) on node {NODE_NAME}")
+    try:
+        if vm_strategy == "migrate":
+            _migrate_vms_off_node()
+        elif vm_strategy == "stop":
+            _stop_vms_on_node()
         else:
-            logger.info(f"Force-killed {killed} VM(s) on node {NODE_NAME} — proceeding immediately to poweroff")
+            killed = _force_kill_vms_on_node()
+            logger.info(f"Force-killed {killed} VM(s) on node {NODE_NAME}")
     except Exception as pods_error:
-        logger.error(f"VM force-kill phase failed: {str(pods_error)} — proceeding to poweroff anyway")
+        logger.error(f"VM strategy '{vm_strategy}' failed: {str(pods_error)} — proceeding to poweroff anyway")
 
 
 def _host_poweroff():

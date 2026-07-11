@@ -1,0 +1,61 @@
+{{- if .Values.schedule.enabled }}
+# Scheduled shutdown: a CronJob that calls the shutdown API on the configured cron,
+# passing the selected nodes + VM strategy. nodes empty => whole cluster.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Values.daemonset.name }}-schedule
+  namespace: {{ .Values.daemonset.namespace }}
+  labels:
+    app: node-shutdown
+spec:
+  schedule: {{ .Values.schedule.cron | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app: node-shutdown-schedule
+        spec:
+          serviceAccountName: {{ .Values.rbac.serviceAccountName }}
+          restartPolicy: Never
+          containers:
+            - name: trigger
+              image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              env:
+                - name: AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secret.name }}
+                      key: {{ .Values.secret.key }}
+                - name: API_URL
+                  value: "{{ if .Values.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.daemonset.name }}-nodeport.{{ .Values.daemonset.namespace }}.svc:{{ .Values.nodePort.port }}"
+                - name: TARGET_NODES
+                  value: {{ .Values.schedule.nodes | toJson | quote }}
+                - name: VM_STRATEGY
+                  value: {{ .Values.schedule.vmStrategy | quote }}
+              command: ["python", "-c"]
+              args:
+                - |
+                  import json, os, ssl, urllib.request
+                  token = os.environ["AUTH_TOKEN"]
+                  nodes = json.loads(os.environ.get("TARGET_NODES", "[]"))
+                  strategy = os.environ.get("VM_STRATEGY", "force")
+                  url = os.environ["API_URL"].rstrip("/") + "/system/shutdown"
+                  body = json.dumps({"nodes": nodes, "vmStrategy": strategy}).encode()
+                  ctx = None
+                  if url.startswith("https"):
+                      ctx = ssl.create_default_context()
+                      ctx.check_hostname = False
+                      ctx.verify_mode = ssl.CERT_NONE
+                  req = urllib.request.Request(
+                      url, method="POST", data=body,
+                      headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+                  print("Triggering scheduled shutdown:", {"nodes": nodes, "vmStrategy": strategy})
+                  print(urllib.request.urlopen(req, timeout=30, context=ctx).read().decode())
+{{- end }}

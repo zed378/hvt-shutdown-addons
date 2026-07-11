@@ -1,0 +1,124 @@
+{{- if and .Values.uiDashboard.enabled .Values.uiDashboard.manageUiIndex }}
+{{- /* Resolve the VIP the same way the deployment does (explicit, else Harvester's vip Setting). */ -}}
+{{- $vip := .Values.uiDashboard.vip }}
+{{- if not $vip }}
+{{-   $vipSetting := lookup "harvesterhci.io/v1beta1" "Setting" "" "vip" }}
+{{-   if and $vipSetting $vipSetting.value }}{{- $vip = $vipSetting.value }}{{- end }}
+{{- end }}
+{{- $uiIndex := printf "https://%s:%v/dashboard/index.html" $vip .Values.uiDashboard.nodePort.nodePort }}
+{{- $image := .Values.hookImage }}
+# ServiceAccount + RBAC to patch the Rancher ui-index / ui-source settings.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.uiDashboard.name }}-uisetting-sa
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Values.uiDashboard.name }}-uisetting
+rules:
+  - apiGroups: ["harvesterhci.io"]
+    resources: ["settings"]
+    resourceNames: ["ui-index", "ui-source"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.uiDashboard.name }}-uisetting
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.uiDashboard.name }}-uisetting-sa
+    namespace: {{ .Values.namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ .Values.uiDashboard.name }}-uisetting
+  apiGroup: rbac.authorization.k8s.io
+---
+# On enable/upgrade: point ui-index at the custom dashboard, ui-source = external.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.uiDashboard.name }}-set-ui-index
+  namespace: {{ .Values.namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.uiDashboard.name }}-set-ui-index
+    spec:
+      serviceAccountName: {{ .Values.uiDashboard.name }}-uisetting-sa
+      restartPolicy: Never
+      containers:
+        - name: set-ui-index
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.hookImagePullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              python - <<'PY'
+              from kubernetes import client, config
+              config.load_incluster_config()
+              a = client.CustomObjectsApi()
+              def setv(name, val):
+                  try:
+                      a.patch_cluster_custom_object(
+                          "harvesterhci.io", "v1beta1", "settings", name,
+                          [{"op": "add", "path": "/value", "value": val}])
+                      print("set %s = %r" % (name, val))
+                  except Exception as e:
+                      print("WARN: could not set %s: %s" % (name, e))
+              setv("ui-index", "{{ $uiIndex }}")
+              setv("ui-source", "external")
+              PY
+---
+# On disable/uninstall: restore ui-index empty + ui-source auto (the defaults),
+# BEFORE the dashboard container is removed, so the UI never points at a dead URL.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.uiDashboard.name }}-restore-ui-index
+  namespace: {{ .Values.namespace }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.uiDashboard.name }}-restore-ui-index
+    spec:
+      serviceAccountName: {{ .Values.uiDashboard.name }}-uisetting-sa
+      restartPolicy: Never
+      containers:
+        - name: restore-ui-index
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.hookImagePullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              python - <<'PY'
+              from kubernetes import client, config
+              config.load_incluster_config()
+              a = client.CustomObjectsApi()
+              def setv(name, val):
+                  try:
+                      a.patch_cluster_custom_object(
+                          "harvesterhci.io", "v1beta1", "settings", name,
+                          [{"op": "add", "path": "/value", "value": val}])
+                      print("restored %s = %r" % (name, val))
+                  except Exception as e:
+                      print("WARN: could not restore %s: %s" % (name, e))
+              setv("ui-index", "")
+              setv("ui-source", "")
+              PY
+{{- end }}

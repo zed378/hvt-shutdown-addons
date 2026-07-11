@@ -1,0 +1,28 @@
+# netbird chart — runs the NetBird agent as a DaemonSet on every Harvester node,
+# enrolling each node into your NetBird network using a management URL ("domain")
+# and a setup key. Configure these via the "NetBird" page in the custom dashboard
+# (writes this add-on's valuesContent) or here directly.
+
+netbird:
+  enabled: true
+  name: netbird
+  namespace: harvester-system
+
+  image:
+    repository: "netbirdio/netbird"
+    tag: "latest"
+    pullPolicy: "IfNotPresent"
+
+  # The NetBird management URL — the "domain" (e.g. https://api.netbird.io for the
+  # cloud, or your self-hosted https://netbird.example.com).
+  managementUrl: ""
+  # The NetBird setup key used to enroll each node (use a reusable key).
+  setupKey: ""
+
+  resources:
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+    requests:
+      cpu: "50m"
+      memory: "64Mi"

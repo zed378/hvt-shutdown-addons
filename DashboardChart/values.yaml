@@ -1,0 +1,57 @@
+# harvester-dashboard chart — the custom Harvester UI (forked harvester-ui-extension)
+# served over HTTPS and wired in as Harvester's ui-index. Deploy once; feature
+# add-ons (node-shutdown, netbird) contribute their own menus into it, each gated
+# on that add-on being enabled.
+
+# Namespace the dashboard resources deploy into.
+namespace: "harvester-system"
+
+# Image for the ui-index set/restore hook Jobs. Needs to run `python` with the
+# kubernetes client — the node-shutdown API image bundles it. Override to any such
+# image if you deploy the dashboard without node-shutdown.
+hookImage: "zed378/hvt-shutdown:latest"
+hookImagePullPolicy: "IfNotPresent"
+
+uiDashboard:
+  enabled: true
+  name: harvester-dashboard
+  replicas: 1
+
+  # Auto-set Harvester ui-index/ui-source on enable, restore on disable.
+  manageUiIndex: true
+
+  image:
+    registry: "zed378"
+    repository: "harvester-dashboard"
+    tag: "v1.7-node-shutdown"
+    pullPolicy: "IfNotPresent"
+
+  # TLS — VIP is cluster-specific; set it in addon.yaml. Empty here falls back to
+  # the Harvester `vip` Setting (Helm lookup) or 127.0.0.1.
+  vip: ""
+  certSans: ""
+  tls:
+    # Preferred: reuse Harvester's serving cert (auto-copied from cattle-system).
+    secretName: ""
+    copyFrom:
+      namespace: "cattle-system"
+      name: ""
+
+  nodePort:
+    enabled: true
+    port: 8443
+    targetPort: 8443
+    nodePort: 30090
+    externalTrafficPolicy: Cluster
+
+  updateStrategy:
+    maxUnavailable: 0
+    maxSurge: 1
+
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "100m"
+      memory: "128Mi"

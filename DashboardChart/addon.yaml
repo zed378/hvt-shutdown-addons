@@ -1,0 +1,52 @@
+apiVersion: harvesterhci.io/v1beta1
+kind: Addon
+metadata:
+  name: harvester-dashboard
+  namespace: harvester-system
+spec:
+  # Set to true to install the custom dashboard and switch Harvester's ui-index to it.
+  enabled: false
+  repo: "https://zed378.github.io/hvt-shutdown-addons/"
+  version: "0.1.0"
+  chart: harvester-dashboard
+  valuesContent: |-
+    namespace: "harvester-system"
+    hookImage: "zed378/hvt-shutdown:latest"
+    hookImagePullPolicy: "Always"
+
+    uiDashboard:
+      enabled: true
+      name: harvester-dashboard
+      replicas: 1
+      manageUiIndex: true
+      image:
+        registry: "zed378"
+        repository: "harvester-dashboard"
+        tag: "v1.7-node-shutdown"
+        pullPolicy: "Always"
+      # Harvester VIP you browse to (used for the ui-index URL + cert). Leave empty
+      # to auto-ingest from the Harvester `vip` Setting.
+      vip: "10.1.112.50"
+      certSans: ""
+      tls:
+        secretName: ""
+        # Reuse Harvester's own serving cert so :30090 is trusted like the VIP.
+        copyFrom:
+          namespace: "cattle-system"
+          name: "serving-cert"
+      nodePort:
+        enabled: true
+        port: 8443
+        targetPort: 8443
+        nodePort: 30090
+        externalTrafficPolicy: Cluster
+      updateStrategy:
+        maxUnavailable: 0
+        maxSurge: 1
+      resources:
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+        requests:
+          cpu: "100m"
+          memory: "128Mi"

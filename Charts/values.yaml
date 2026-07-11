@@ -51,6 +51,10 @@ rbac:
     - apiGroups: ["kubevirt.io"]
       resources: ["virtualmachineinstances"]
       verbs: ["get", "list", "watch", "delete"]
+    # Live-migrate VMs off a node (the "migrate" VM strategy).
+    - apiGroups: ["kubevirt.io"]
+      resources: ["virtualmachineinstancemigrations"]
+      verbs: ["get", "list", "create"]
     # Enumerate peer pods and force-delete straggler virt-launcher pods.
     - apiGroups: [""]
       resources: ["pods"]
@@ -163,6 +167,15 @@ nodePort:
 # Max time to wait for VMs to fully shut down before baremetal poweroff (seconds)
 vmShutdownTimeout: 120
 
+# Scheduled shutdown — an in-cluster CronJob that calls the shutdown API on a
+# schedule. `nodes` empty = whole cluster; otherwise only those nodes. `vmStrategy`
+# is migrate | stop | force. Configure this from the dashboard Node Shutdown page.
+schedule:
+  enabled: false
+  cron: "0 2 * * *"
+  nodes: []
+  vmStrategy: "migrate"
+
 # Network policy (optional - restricts incoming traffic to the API port).
 # IMPORTANT: this DaemonSet uses hostNetwork: true. Kubernetes NetworkPolicy
 # generally does NOT apply to hostNetwork pods (traffic to the node IP bypasses
@@ -173,61 +186,6 @@ networkPolicy:
   enabled: false
   # When set, only allows ingress from this source CIDR on the API port.
   ingressFromCidr: null # e.g., "10.0.0.0/8"
-
-# Rancher UIPlugin (installed by this Helm chart)
-# The UI extension is a Rancher UI plugin (module-federation bundle) served from
-# a separate in-cluster container image (nginx). Rancher/Harvester loads it from
-# the internal ClusterIP service DNS endpoint below — NOT from GitHub Pages.
-uiPlugin:
-  enabled: true
-  # When true, creates the UIPlugin CR so Rancher picks up the extension
-  createUIPluginResource: true
-  # UIPlugin metadata
-  name: hvt-shutdown-ui
-  namespace: cattle-ui-plugin-system
-
-  # UI container image (separate from the API image, built by Dockerfile.ui)
-  image:
-    registry: "zed378"
-    repository: "hvt-shutdown-ui"
-    tag: "latest"
-    pullPolicy: "IfNotPresent"
-
-  # UIPlugin spec
-  pluginName: hvt-shutdown-ui
-  # Kept aligned with the chart version
-  pluginVersion: "1.2.0"
-  # Internal DNS endpoint of the in-cluster ClusterIP service that serves the
-  # extension bundle. Format: <service>.<namespace>.svc:<port>
-  endpoint: "http://hvt-shutdown-ui.cattle-ui-plugin-system.svc:80"
-
-  # Rancher UIPlugin caching behavior
-  noCache: false
-
-  # ClusterIP service configuration
-  service:
-    port: 80
-
-  # Number of replicas for the UI deployment
-  replicas: 1
-
-  # Rolling update strategy for zero-downtime UI transitions.
-  # maxUnavailable: 0 keeps the serving pod up until the new one is Ready;
-  # maxSurge: 1 starts the replacement alongside it (both run simultaneously).
-  updateStrategy:
-    maxUnavailable: 0
-    maxSurge: 1
-    # Optional: seconds a new pod must stay Ready before it's considered available.
-    minReadySeconds: 0
-
-  # Resource limits for the UI container
-  resources:
-    limits:
-      cpu: "100m"
-      memory: "64Mi"
-    requests:
-      cpu: "50m"
-      memory: "32Mi"
 
 # Standalone token console: a network-restricted, UNAUTHENTICATED web UI to set /
 # rotate the shutdown auth token. Served from the API image as a separate,

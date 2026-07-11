@@ -1,14 +1,14 @@
 apiVersion: v2
-name: node-shutdown
-description: Secure node shutdown service for Harvester clusters
+name: netbird
+description: NetBird mesh VPN agent (DaemonSet) for Harvester nodes
 type: application
-version: 1.5.0
-appVersion: "1.3.1"
+version: 0.1.0
+appVersion: "latest"
 keywords:
   - harvester
-  - shutdown
-  - node
-  - kubevirt
+  - netbird
+  - vpn
+  - wireguard
 maintainers:
   - name: hvt-shutdown-addons
     url: https://github.com/zed378/hvt-shutdown-addons

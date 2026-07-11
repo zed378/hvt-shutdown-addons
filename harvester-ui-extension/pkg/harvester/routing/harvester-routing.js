@@ -17,6 +17,7 @@ import ProjectNamespaces from '../pages/c/_cluster/projectsnamespaces.vue';
 import HarvesterAlertmanagerReceiver from '../pages/c/_cluster/alertmanagerconfig/_alertmanagerconfigid/receiver.vue';
 import HarvesterUnsupported from '../pages/c/_cluster/unsupported/index.vue';
 import HarvesterNodeShutdown from '../pages/c/_cluster/node-shutdown/index.vue';
+import HarvesterNetbird from '../pages/c/_cluster/netbird/index.vue';
 
 const routes = [
   {
@@ -80,6 +81,11 @@ const routes = [
     name:      `${ PRODUCT_NAME }-c-cluster-node-shutdown`,
     path:      `/:product/c/:cluster/node-shutdown`,
     component: HarvesterNodeShutdown,
+  },
+  {
+    name:      `${ PRODUCT_NAME }-c-cluster-netbird`,
+    path:      `/:product/c/:cluster/netbird`,
+    component: HarvesterNetbird,
   },
   {
     name:      `${ PRODUCT_NAME }-c-cluster`,

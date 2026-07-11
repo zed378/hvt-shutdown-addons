@@ -1,74 +1,120 @@
-# ---- Stage 1: Build UI plugin static files ----
-FROM node:24-slim AS builder
+# Custom Harvester dashboard (fork with the "Node Shutdown" menu) built to be
+# served as Harvester's `ui-index` (Settings -> UI -> ui-index, ui-source: External).
+#
+# NOTE: this builds the FULL dashboard (yarn build, RANCHER_ENV=harvester) — NOT
+# `build-pkg`. build-pkg only emits the extension bundle to be loaded into a Rancher
+# shell (the path that never cached on this Harvester). The ui-index needs the whole
+# standalone dashboard (index.html + shell + assets), served here under /dashboard/.
+#
+# TLS is configured at RUNTIME (not baked at build): either mount a Kubernetes TLS
+# Secret at /etc/nginx/certs (tls.crt + tls.key), or set the VIP env var and the
+# container self-signs a cert for it on start. So one image works on any cluster.
+
+# ---- Stage 1: Build the full Harvester dashboard ----
+FROM node:20 AS builder
 
 WORKDIR /build
+COPY harvester-ui-extension/ ./
 
-# Copy UI plugin source
-COPY hvt-shutdown-ui/ ./
+# Harvester serves the dashboard PAGE at its own origin (https://<VIP>) and loads
+# the JS/CSS from an ABSOLUTE url. So RESOURCE_BASE must be the absolute URL where
+# THIS container serves its assets — i.e. https://<VIP>:<nodePort>/dashboard.
+# (A relative base makes the browser fetch assets from the Harvester host, which
+# returns the SPA fallback HTML -> "MIME type text/html is not executable".)
+# ROUTER_BASE stays /dashboard/ (routes run on the Harvester origin under /dashboard).
+# Use a placeholder domain for the VIP so we can replace it at runtime!
+ARG RESOURCE_BASE=https://__VIP_PLACEHOLDER__:30090/dashboard/
+RUN yarn --pure-lockfile install && \
+    COMMIT=custom VERSION=v1.7-node-shutdown \
+    OUTPUT_DIR=dist/hosted \
+    ROUTER_BASE=/dashboard/ \
+    RESOURCE_BASE=${RESOURCE_BASE} \
+    RANCHER_ENV=harvester \
+    NODE_OPTIONS=--max-old-space-size=7168 \
+    yarn run build
 
-# Install dependencies and build the UI extension package
-# Remove .yarnrc frozen-lockfile constraint (lockfile may differ across platforms)
-RUN rm -f .yarnrc && \
-    yarn install && \
-    yarn build-pkg hvt-shutdown-ui true
-
-# ---- Stage 2: Serve static files with nginx ----
+# ---- Stage 2: Serve over HTTPS with nginx ----
 FROM nginx:1.27-alpine
 
-# Remove default nginx config and html
-RUN rm -rf /etc/nginx/conf.d/default.conf /usr/share/nginx/html/*
+RUN apk add --no-cache openssl && \
+    rm -rf /etc/nginx/conf.d/default.conf /usr/share/nginx/html/* && \
+    mkdir -p /etc/nginx/certs
 
-# Copy custom nginx configuration
-COPY <<'NGINX_CONF' /etc/nginx/conf.d/default.conf
+COPY <<'EOF' /etc/nginx/conf.d/default.conf
 server {
-    listen 8080;
+    listen 8443 ssl;
     server_name _;
 
+    ssl_certificate     /etc/nginx/certs/tls.crt;
+    ssl_certificate_key /etc/nginx/certs/tls.key;
+
     root /usr/share/nginx/html;
-    index package.json;
 
-    # Serve static files with caching.
-    # NOTE: wildcard CORS is required so the Rancher/Harvester dashboard can load
-    # this extension bundle cross-origin from the UIPlugin endpoint.
-    location / {
-        try_files $uri $uri/ =404;
-        add_header Access-Control-Allow-Origin *;
-        add_header X-Content-Type-Options "nosniff";
-        add_header Cache-Control "public, max-age=3600";
-    }
+    # Keep redirects relative so they work through the NodePort (not the pod's 8443).
+    absolute_redirect off;
 
-    # Health check endpoint
+    # Rancher/Harvester loads the bundle cross-origin from ui-index.
+    add_header Access-Control-Allow-Origin  *;
+    add_header Access-Control-Allow-Methods 'GET, OPTIONS';
+
+    location = / { return 302 /dashboard/; }
+
     location /healthz {
         access_log off;
-        return 200 '{"status":"ok"}';
-        add_header Content-Type application/json;
+        return 200 'ok';
+        add_header Content-Type text/plain;
+    }
+
+    # The dashboard is built for /dashboard/ (ROUTER_BASE/RESOURCE_BASE).
+    location /dashboard/ {
+        alias /usr/share/nginx/html/;
+        try_files $uri $uri/ /dashboard/index.html;
     }
 }
-NGINX_CONF
+EOF
 
-# Serve the extension bundle at the web ROOT.
-# `yarn build-pkg` emits dist-pkg/<name>-<version>/ containing the umd bundle and
-# its package.json. We flatten THAT directory's contents into the web root so the
-# manifest's "main" (e.g. hvt-shutdown-ui-1.2.0.umd.min.js) resolves at
-# <endpoint>/<main>. Rancher reads <endpoint>/package.json and then fetches "main"
-# relative to the endpoint root; if the JS lives in a subdirectory it 404s and the
-# UIPlugin is silently never cached (STATE stays empty). Flattening fixes that.
-COPY --from=builder /build/dist-pkg/ /tmp/dist-pkg/
-RUN VERSION_DIR=$(ls -d /tmp/dist-pkg/hvt-shutdown-ui-*/ 2>/dev/null | head -1) && \
-    if [ -z "$VERSION_DIR" ]; then echo "ERROR: No versioned build dir found"; exit 1; fi && \
-    cp -a "${VERSION_DIR}." /usr/share/nginx/html/ && \
-    rm -rf /tmp/dist-pkg && \
-    echo "Serving flattened extension bundle:" && ls -1 /usr/share/nginx/html
+# Runtime TLS provisioning and asset path patching. Runs (as root) via the nginx
+# image's /docker-entrypoint.d/ hook, before nginx starts:
+COPY <<'EOF' /docker-entrypoint.d/40-gen-tls.sh
+#!/bin/sh
+set -e
+VIP="${VIP:-127.0.0.1}"
 
-EXPOSE 8080
+# 1. Patch the dashboard assets to use the runtime VIP so the browser fetches
+# JS/CSS from this NodePort instead of asking the Harvester backend.
+echo "[init] Patching RESOURCE_BASE in dashboard files to use VIP: $VIP"
+find /usr/share/nginx/html -type f \( -name "*.html" -o -name "*.js" -o -name "*.css" \) -exec \
+    sed -i "s|https://__VIP_PLACEHOLDER__:30090|https://$VIP:30090|g" {} +
 
-# Run nginx as non-root
-RUN chown -R nginx:nginx /usr/share/nginx/html && \
-    chown -R nginx:nginx /var/cache/nginx && \
-    chown -R nginx:nginx /var/log/nginx && \
-    touch /var/run/nginx.pid && \
-    chown nginx:nginx /var/run/nginx.pid
+# 2. Setup TLS
+CERT_DIR=/etc/nginx/certs
+if [ -s "$CERT_DIR/tls.crt" ] && [ -s "$CERT_DIR/tls.key" ]; then
+  echo "[tls] using mounted certificate at $CERT_DIR"
+  exit 0
+fi
 
-USER 101
+SAN="DNS:localhost,IP:127.0.0.1"
+if echo "$VIP" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+  SAN="$SAN,IP:$VIP"
+else
+  SAN="$SAN,DNS:$VIP"
+fi
+if [ -n "$CERT_SANS" ]; then
+  SAN="$SAN,$CERT_SANS"
+fi
+echo "[tls] generating self-signed certificate (SAN=$SAN)"
+mkdir -p "$CERT_DIR"
+openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+  -keyout "$CERT_DIR/tls.key" -out "$CERT_DIR/tls.crt" \
+  -subj "/CN=harvester-node-shutdown-dashboard" \
+  -addext "subjectAltName=$SAN"
+EOF
+RUN chmod +x /docker-entrypoint.d/40-gen-tls.sh
 
+COPY --from=builder /build/dist/hosted/ /usr/share/nginx/html/
+
+# Drop source maps — dev-only, not runtime-patched, and unneeded in production.
+RUN find /usr/share/nginx/html -name '*.js.map' -delete
+
+EXPOSE 8443
 CMD ["nginx", "-g", "daemon off;"]

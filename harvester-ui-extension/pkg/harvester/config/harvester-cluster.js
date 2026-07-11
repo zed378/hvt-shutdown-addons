@@ -13,6 +13,7 @@ import {
   NETWORK_POLICY
 } from '@shell/config/types';
 import { HCI, VOLUME_SNAPSHOT } from '../types';
+import { registerAddonNav } from '../utils/dynamic-nav';
 import {
   STATE,
   NAME_UNLINKED,
@@ -181,7 +182,9 @@ export function init($plugin, store) {
   });
 
   // node-shutdown add-on token console — custom page in the "Advanced" nav group.
-  basicType(['node-shutdown'], 'advanced');
+  // The virtualType/route are always registered so the page exists, but the nav
+  // entry (basicType) is toggled by registerAddonNav below based on whether the
+  // node-shutdown add-on is enabled — so the menu disappears when the add-on is off.
   virtualType({
     labelKey:   'harvester.nodeShutdown.label',
     group:      'advanced',
@@ -191,6 +194,31 @@ export function init($plugin, store) {
     icon:       'gear',
     route:      { name: `${ PRODUCT_NAME }-c-cluster-node-shutdown` },
     exact:      true,
+  });
+  registerAddonNav(store, PRODUCT_NAME, {
+    addonName:    'node-shutdown',
+    resourceType: HCI.ADD_ONS,
+    navGroup:     'advanced',
+    types:        ['node-shutdown'],
+  });
+
+  // netbird add-on — custom page in the "Advanced" nav group, gated on the
+  // netbird add-on being enabled (same pattern as node-shutdown).
+  virtualType({
+    labelKey:   'harvester.netbird.label',
+    group:      'advanced',
+    namespaced: false,
+    name:       'netbird',
+    weight:     -98,
+    icon:       'globe',
+    route:      { name: `${ PRODUCT_NAME }-c-cluster-netbird` },
+    exact:      true,
+  });
+  registerAddonNav(store, PRODUCT_NAME, {
+    addonName:    'netbird',
+    resourceType: HCI.ADD_ONS,
+    navGroup:     'advanced',
+    types:        ['netbird'],
   });
 
   basicType([HCI.VM]);
