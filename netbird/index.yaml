@@ -3,9 +3,9 @@ entries:
   netbird:
   - apiVersion: v2
     appVersion: latest
-    created: "2026-07-17T16:12:50.933850234+07:00"
+    created: "2026-07-17T16:25:08.89440602+07:00"
     description: NetBird mesh VPN agent (DaemonSet) for Harvester nodes
-    digest: 6f634b123d0eedbf634013688401306d726d6a772e7d632d1547a5e35d2d5fa3
+    digest: a31382c6cb6876d4b3ee4d16296f7450d661e723b5d3657028b744063645c624
     keywords:
     - harvester
     - netbird
@@ -19,4 +19,4 @@ entries:
     urls:
     - https://zed378.github.io/hvt-shutdown-addons/netbird/netbird-0.1.0.tgz
     version: 0.1.0
-generated: "2026-07-17T16:12:50.933244001+07:00"
+generated: "2026-07-17T16:25:08.893965657+07:00"
