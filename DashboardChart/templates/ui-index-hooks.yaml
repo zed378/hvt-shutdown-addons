@@ -1,11 +1,12 @@
 {{- if and .Values.uiDashboard.enabled .Values.uiDashboard.manageUiIndex }}
-{{- /* Resolve the VIP the same way the deployment does (explicit, else Harvester's vip Setting). */ -}}
-{{- $vip := .Values.uiDashboard.vip }}
-{{- if not $vip }}
-{{-   $vipSetting := lookup "harvesterhci.io/v1beta1" "Setting" "" "vip" }}
-{{-   if and $vipSetting $vipSetting.value }}{{- $vip = $vipSetting.value }}{{- end }}
-{{- end }}
-{{- $uiIndex := printf "https://%s:%v/dashboard/index.html" $vip .Values.uiDashboard.nodePort.nodePort }}
+{{- /*
+  ui-index is fetched SERVER-SIDE by Harvester (it serves the HTML from its own
+  origin), so we point it at cluster-internal DNS over plain HTTP: no VIP to
+  hard-code, no TLS, and no cert prompt for this hop. The JS/CSS referenced inside
+  that HTML remain absolute (https://<VIP>:nodePort) because the BROWSER fetches
+  those and cannot resolve cluster DNS.
+*/ -}}
+{{- $uiIndex := printf "http://%s-internal.%s.svc:%v%s/index.html" .Values.uiDashboard.name .Values.namespace .Values.uiDashboard.internalPort .Values.uiDashboard.assetPath }}
 {{- $image := .Values.hookImage }}
 # ServiceAccount + RBAC to patch the Rancher ui-index / ui-source settings.
 apiVersion: v1
@@ -64,19 +65,38 @@ spec:
           args:
             - |
               python - <<'PY'
+              import sys
               from kubernetes import client, config
               config.load_incluster_config()
               a = client.CustomObjectsApi()
+
+              # NOTE: the client sends these as application/merge-patch+json, so the
+              # body must be an OBJECT. A JSON-Patch array gets rejected with:
+              #   error decoding patch: json: cannot unmarshal array into Go value
+              #   of type map[string]interface {}
+              # `value` is a top-level field on harvesterhci.io Settings.
               def setv(name, val):
-                  try:
-                      a.patch_cluster_custom_object(
-                          "harvesterhci.io", "v1beta1", "settings", name,
-                          [{"op": "add", "path": "/value", "value": val}])
-                      print("set %s = %r" % (name, val))
-                  except Exception as e:
-                      print("WARN: could not set %s: %s" % (name, e))
-              setv("ui-index", "{{ $uiIndex }}")
-              setv("ui-source", "external")
+                  a.patch_cluster_custom_object(
+                      "harvesterhci.io", "v1beta1", "settings", name,
+                      {"value": val})
+                  print("set %s = %r" % (name, val))
+
+              # Order matters: set ui-index FIRST and abort if it fails. Flipping
+              # ui-source to "external" while ui-index is still the default would
+              # make Harvester silently load the STOCK releases.rancher.com UI
+              # instead of ours — a confusing half-applied state. Fail loudly.
+              try:
+                  setv("ui-index", "{{ $uiIndex }}")
+              except Exception as e:
+                  print("ERROR: could not set ui-index: %s" % e)
+                  print("Leaving ui-source untouched so Harvester keeps its current UI.")
+                  sys.exit(1)
+
+              try:
+                  setv("ui-source", "external")
+              except Exception as e:
+                  print("ERROR: could not set ui-source: %s" % e)
+                  sys.exit(1)
               PY
 ---
 # On disable/uninstall: restore ui-index empty + ui-source auto (the defaults),
@@ -110,15 +130,28 @@ spec:
               from kubernetes import client, config
               config.load_incluster_config()
               a = client.CustomObjectsApi()
-              def setv(name, val):
+
+              # harvesterhci.io Settings carry BOTH a top-level `default` and a
+              # top-level `value`. Restore `value` back to that setting's own
+              # `default` — blanking it would leave Harvester with no ui-index to
+              # load at all. Read the default off the live object so we never
+              # hard-code the Harvester release URL.
+              def restore(name):
                   try:
+                      obj = a.get_cluster_custom_object(
+                          "harvesterhci.io", "v1beta1", "settings", name)
+                      default = obj.get("default", "")
                       a.patch_cluster_custom_object(
                           "harvesterhci.io", "v1beta1", "settings", name,
-                          [{"op": "add", "path": "/value", "value": val}])
-                      print("restored %s = %r" % (name, val))
+                          {"value": default})
+                      print("restored %s = %r (its default)" % (name, default))
                   except Exception as e:
+                      # Never block the uninstall.
                       print("WARN: could not restore %s: %s" % (name, e))
-              setv("ui-index", "")
-              setv("ui-source", "")
+
+              # ui-source first: stop Harvester using the external URL before the
+              # dashboard container goes away.
+              restore("ui-source")
+              restore("ui-index")
               PY
 {{- end }}

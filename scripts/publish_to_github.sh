@@ -1,24 +1,21 @@
 #!/bin/bash
-# Script to publish Helm chart to GitHub Pages
+# Publish the Helm charts to GitHub Pages.
 # Usage: ./scripts/publish_to_github.sh
 #
-# Flow:
-#   1. Generate Helm tarball and index.yaml
-#   2. Push tarball + index + README to 'pages' branch
+# Each chart is published into a folder on the 'pages' branch, and EVERY folder
+# gets its OWN index.yaml. A chart's add-on `repo:` URL must match its folder:
+#
+#   Charts/          -> node-shutdown        -> <pages>/            (repo root)
+#   DashboardChart/  -> harvester-dashboard  -> <pages>/dashboard/  (own index)
+#   NetbirdChart/    -> netbird              -> <pages>/netbird/    (own index)
 #
 # GitHub Pages serves the Helm chart repository at:
 #   https://zed378.github.io/hvt-shutdown-addons
 #
-# Requirements:
-#   - GitHub CLI (gh) authenticated: gh auth login
-#   - Helm installed
-#   - Git configured with remote origin
+# Requirements: helm, git (with push access to the 'pages' branch).
 #
 # BEFORE FIRST USE: Enable GitHub Pages in repository settings:
-#   1. Go to https://github.com/zed378/hvt-shutdown-addons/settings/pages
-#   2. Source: Deploy from a branch
-#   3. Branch: pages (root /)
-#   4. Save
+#   Settings -> Pages -> Source: Deploy from a branch -> Branch: pages (root /)
 
 set -e
 
@@ -30,114 +27,113 @@ BRANCH="pages"
 HELM_REPO_URL="https://${OWNER}.github.io/${REPO_NAME}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$SCRIPT_DIR/.."
-CHART_DIR="$PROJECT_ROOT/Charts"
-
-CHART_VERSION=$(grep '^version:' "$CHART_DIR/Chart.yaml" | awk '{print $2}' | tr -d '"')
-CHART_NAME=$(grep '^name:'    "$CHART_DIR/Chart.yaml" | awk '{print $2}' | tr -d '"')
-CHART_TGZ_FILE="$PROJECT_ROOT/${CHART_NAME}-${CHART_VERSION}.tgz"
-INDEX_YAML_FILE="$PROJECT_ROOT/index.yaml"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 README_FILE="$PROJECT_ROOT/README.md"
 
-echo "=== GitHub Pages Publisher ==="
-echo ""
+# "<chart dir>:<pages folder>"  —  the folder "root" means the repo root.
+CHARTS=(
+  "Charts:root"
+  "NetbirdChart:netbird"
+  "DashboardChart:dashboard"
+)
+
+echo "=== GitHub Pages Publisher (per-folder indexes) ==="
 echo "Repository:  $GITHUB_REPO"
-echo "Branch:      $BRANCH"
 echo "Helm Repo:   $HELM_REPO_URL"
-echo "Chart:       ${CHART_NAME} v${CHART_VERSION}"
 echo ""
 
 # ── Prerequisites ──────────────────────────────────────────────────────
-for cmd in gh helm git; do
+for cmd in helm git; do
     if ! command -v "$cmd" &> /dev/null; then
-        echo "Error: '$cmd' is not installed."
-        exit 1
+        echo "Error: '$cmd' is not installed."; exit 1
     fi
 done
-
-if ! gh auth status &> /dev/null; then
-    echo "Error: GitHub CLI is not authenticated. Run 'gh auth login' first."
-    exit 1
+if ! git remote get-url origin >/dev/null 2>&1; then
+    echo "Error: No git remote 'origin' configured."; exit 1
 fi
-echo "GitHub CLI: Authenticated"
-
-remoteUrl=$(git remote get-url origin 2>&1)
-if [ $? -ne 0 ]; then
-    echo "Error: No git remote 'origin' configured."
-    exit 1
-fi
-echo "Git remote: $remoteUrl"
+echo "Git remote: $(git remote get-url origin)"
 echo ""
 
-# ── Step 1: Generate Helm tarball and index.yaml ───────────────────────
-echo "=== [1/2] Generating Helm tarball and index.yaml ==="
-
-helm package "$CHART_DIR" --destination "$PROJECT_ROOT"
-
-if [ ! -f "$CHART_TGZ_FILE" ]; then
-    echo "Error: Failed to package Helm chart."
-    exit 1
-fi
-
-CHART_FILENAME=$(basename "$CHART_TGZ_FILE")
-helm repo index --url "$HELM_REPO_URL" "$PROJECT_ROOT"
-
-echo "Tarball:    $CHART_FILENAME"
-echo "Index:      index.yaml"
-echo ""
-echo "=== index.yaml ==="
-cat "$INDEX_YAML_FILE"
-echo ""
-
-# ── Step 2: Push tarball + index to pages branch ───────────────────────
-echo "=== [2/2] Pushing tarball and index to '$BRANCH' branch ==="
 TEMP_DIR=$(mktemp -d)
+FOLDERS=$(printf '%s\n' "${CHARTS[@]}" | cut -d: -f2 | sort -u)
+
+# ── Step 1: package each chart into its folder's stage dir, index each ──
+echo "=== [1/2] Packaging + indexing charts ==="
+for folder in $FOLDERS; do
+    stage="$TEMP_DIR/stage-$folder"
+    mkdir -p "$stage"
+    packaged=0
+    for entry in "${CHARTS[@]}"; do
+        d="${entry%%:*}"; f="${entry##*:}"
+        [ "$f" = "$folder" ] || continue
+        chart="$PROJECT_ROOT/$d"
+        if [ ! -f "$chart/Chart.yaml" ]; then
+            echo "Skip: $d has no Chart.yaml"; continue
+        fi
+        name=$(grep '^name:'    "$chart/Chart.yaml" | awk '{print $2}' | tr -d '"')
+        version=$(grep '^version:' "$chart/Chart.yaml" | awk '{print $2}' | tr -d '"')
+        helm package "$chart" --destination "$stage" >/dev/null
+        if [ ! -f "$stage/${name}-${version}.tgz" ]; then
+            echo "Error: Failed to package $d ($name)."; rm -rf "$TEMP_DIR"; exit 1
+        fi
+        echo "Packaged: ${name} v${version} -> /${folder}"
+        packaged=1
+    done
+    [ "$packaged" = "1" ] || continue
+
+    # Index URL must match where the folder is served from.
+    if [ "$folder" = "root" ]; then index_url="$HELM_REPO_URL"; else index_url="$HELM_REPO_URL/$folder"; fi
+    helm repo index --url "$index_url" "$stage"
+    echo "Indexed: $index_url/index.yaml"
+done
+echo ""
+
+# ── Step 2: push every folder to the pages branch ───────────────────────
+echo "=== [2/2] Pushing to '$BRANCH' branch ==="
 PAGES_DIR="$TEMP_DIR/pages"
-
-if git clone --branch "$BRANCH" --single-branch "$GITHUB_REPO" "$PAGES_DIR" 2>/dev/null; then
-    echo "Cloned '$BRANCH' branch."
-else
+if ! git clone --branch "$BRANCH" --single-branch "$GITHUB_REPO" "$PAGES_DIR" 2>/dev/null; then
     echo "Error: Cannot clone '$BRANCH' branch. Make sure it exists."
-    rm -rf "$TEMP_DIR"
-    exit 1
+    rm -rf "$TEMP_DIR"; exit 1
 fi
+echo "Cloned '$BRANCH' branch."
 
-cp "$CHART_TGZ_FILE"  "$PAGES_DIR/"
-cp "$INDEX_YAML_FILE" "$PAGES_DIR/"
+for folder in $FOLDERS; do
+    stage="$TEMP_DIR/stage-$folder"
+    [ -d "$stage" ] || continue
+    if [ "$folder" = "root" ]; then dest="$PAGES_DIR"; else dest="$PAGES_DIR/$folder"; fi
+    mkdir -p "$dest"
+    cp "$stage"/* "$dest"/
+    echo "Staged files into /${folder}"
+done
 if [ -f "$README_FILE" ]; then
     cp "$README_FILE" "$PAGES_DIR/README.md"
-else
-    echo "Warning: README.md not found at $README_FILE — skipping."
 fi
 
 cd "$PAGES_DIR"
 git config user.email "${OWNER}@users.noreply.github.com"
 git config user.name  "$OWNER"
-git add "$CHART_FILENAME" index.yaml
-[ -f README.md ] && git add README.md
-git commit -m "Publish ${CHART_NAME} v${CHART_VERSION}" --allow-empty \
-    || echo "Nothing to commit."
+git add -A
+git commit -m "Publish charts (per-folder indexes)" --allow-empty || echo "Nothing to commit."
 git push origin "$BRANCH"
-echo "Pushed: $CHART_FILENAME + index.yaml + README.md"
+echo "Pushed."
 
 cd "$PROJECT_ROOT"
 
 # ── Cleanup ────────────────────────────────────────────────────────────
 echo ""
 echo "=== Cleaning up ==="
-rm -f "$CHART_TGZ_FILE"
-rm -f "$INDEX_YAML_FILE"
-rm -rf "$PROJECT_ROOT/charts-output/" "$PROJECT_ROOT/releases/" 2>/dev/null || true
 rm -rf "$TEMP_DIR"
+echo "Done."
 
 echo ""
 echo "=== Published successfully ==="
+echo "node-shutdown: ${HELM_REPO_URL}/index.yaml"
+echo "Dashboard:     ${HELM_REPO_URL}/dashboard/index.yaml"
+echo "Netbird:       ${HELM_REPO_URL}/netbird/index.yaml"
 echo ""
-echo "Helm index:  https://${OWNER}.github.io/${REPO_NAME}/index.yaml"
-echo "Helm chart:  https://${OWNER}.github.io/${REPO_NAME}/${CHART_FILENAME}"
+echo "Add-on repo: URLs must match these folders:"
+echo "  Charts/addon.yaml          repo: ${HELM_REPO_URL}"
+echo "  NetbirdChart/addon.yaml    repo: ${HELM_REPO_URL}/netbird"
+echo "  DashboardChart/addon.yaml  repo: ${HELM_REPO_URL}/dashboard"
 echo ""
-echo "To add the Helm repo:"
-echo "  helm repo add hvt-shutdown ${HELM_REPO_URL}"
-echo "  helm repo update"
-echo "  helm install node-shutdown hvt-shutdown/node-shutdown -n harvester-system"
-echo ""
+echo "Install order: enable 'harvester-dashboard' (the UI), then feature add-ons."

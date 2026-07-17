@@ -667,10 +667,15 @@ def _stop_vms_on_node():
         try:
             vm = custom.get_namespaced_custom_object("kubevirt.io", "v1", ns, "virtualmachines", name)
             spec = vm.get("spec", {})
+            # Merge patch (an OBJECT). The client sends these as
+            # application/merge-patch+json, so a JSON-Patch array is rejected with
+            # "error decoding patch: json: cannot unmarshal array into Go value of
+            # type map[string]interface {}". Only the key present here is touched,
+            # so we never add `running` to a runStrategy VM (or vice versa).
             if "runStrategy" in spec:
-                patch = [{"op": "add", "path": "/spec/runStrategy", "value": "Halted"}]
+                patch = {"spec": {"runStrategy": "Halted"}}
             else:
-                patch = [{"op": "add", "path": "/spec/running", "value": False}]
+                patch = {"spec": {"running": False}}
             custom.patch_namespaced_custom_object("kubevirt.io", "v1", ns, "virtualmachines", name, patch)
             logger.info(f"Requested stop of VM {ns}/{name}")
         except Exception as e:

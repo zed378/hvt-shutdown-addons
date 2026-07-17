@@ -1,14 +1,17 @@
-# Custom Harvester dashboard (fork with the "Node Shutdown" menu) built to be
-# served as Harvester's `ui-index` (Settings -> UI -> ui-index, ui-source: External).
+# Custom Harvester dashboard (fork with the add-on menus) built to be served as
+# Harvester's `ui-index` (Settings -> UI -> ui-index, ui-source: External).
 #
 # NOTE: this builds the FULL dashboard (yarn build, RANCHER_ENV=harvester) — NOT
-# `build-pkg`. build-pkg only emits the extension bundle to be loaded into a Rancher
+# `build-pkg`. build-pkg only emits an extension bundle to be loaded into a Rancher
 # shell (the path that never cached on this Harvester). The ui-index needs the whole
-# standalone dashboard (index.html + shell + assets), served here under /dashboard/.
+# standalone dashboard (index.html + shell + assets).
 #
-# TLS is configured at RUNTIME (not baked at build): either mount a Kubernetes TLS
-# Secret at /etc/nginx/certs (tls.crt + tls.key), or set the VIP env var and the
-# container self-signs a cert for it on start. So one image works on any cluster.
+# NO TLS HERE — on purpose. This container serves plain HTTP only:
+#   * Harvester fetches the ui-index HTML server-side over cluster-internal DNS.
+#   * The browser fetches the JS/CSS through Harvester's OWN ingress (the nginx
+#     ingress on the VIP:443, path ASSET_PATH), so they are SAME-ORIGIN with the
+#     Harvester UI and reuse the cert the operator already trusts. No self-signed
+#     cert, no VIP baked in, and no certificate approval.
 
 # ---- Stage 1: Build the full Harvester dashboard ----
 FROM node:20 AS builder
@@ -16,105 +19,72 @@ FROM node:20 AS builder
 WORKDIR /build
 COPY harvester-ui-extension/ ./
 
-# Harvester serves the dashboard PAGE at its own origin (https://<VIP>) and loads
-# the JS/CSS from an ABSOLUTE url. So RESOURCE_BASE must be the absolute URL where
-# THIS container serves its assets — i.e. https://<VIP>:<nodePort>/dashboard.
-# (A relative base makes the browser fetch assets from the Harvester host, which
-# returns the SPA fallback HTML -> "MIME type text/html is not executable".)
-# ROUTER_BASE stays /dashboard/ (routes run on the Harvester origin under /dashboard).
-# Use a placeholder domain for the VIP so we can replace it at runtime!
-ARG RESOURCE_BASE=https://__VIP_PLACEHOLDER__:30090/dashboard/
+# ASSET_PATH is where the browser fetches JS/CSS from, and MUST match the Ingress
+# path in DashboardChart (uiDashboard.assetPath). It is host-RELATIVE on purpose:
+# the page is served from Harvester's origin, so "/custom-dashboard/..." resolves to
+# https://<harvester>/custom-dashboard/... — same origin, existing cert, no prompt.
+# (An absolute URL here would hard-code the VIP and require its own certificate.)
+#
+# ROUTER_BASE stays /dashboard/ — that's the route Harvester serves the SPA at.
+ARG ASSET_PATH=/custom-dashboard
 RUN yarn --pure-lockfile install && \
     COMMIT=custom VERSION=v1.7-node-shutdown \
     OUTPUT_DIR=dist/hosted \
     ROUTER_BASE=/dashboard/ \
-    RESOURCE_BASE=${RESOURCE_BASE} \
+    RESOURCE_BASE=${ASSET_PATH} \
     RANCHER_ENV=harvester \
     NODE_OPTIONS=--max-old-space-size=7168 \
     yarn run build
 
-# ---- Stage 2: Serve over HTTPS with nginx ----
+# ---- Stage 2: Serve over plain HTTP with nginx ----
 FROM nginx:1.27-alpine
+ARG ASSET_PATH=/custom-dashboard
 
-RUN apk add --no-cache openssl && \
-    rm -rf /etc/nginx/conf.d/default.conf /usr/share/nginx/html/* && \
-    mkdir -p /etc/nginx/certs
+RUN rm -rf /etc/nginx/conf.d/default.conf /usr/share/nginx/html/*
 
-COPY <<'EOF' /etc/nginx/conf.d/default.conf
-server {
-    listen 8443 ssl;
-    server_name _;
-
-    ssl_certificate     /etc/nginx/certs/tls.crt;
-    ssl_certificate_key /etc/nginx/certs/tls.key;
-
-    root /usr/share/nginx/html;
-
-    # Keep redirects relative so they work through the NodePort (not the pod's 8443).
-    absolute_redirect off;
-
-    # Rancher/Harvester loads the bundle cross-origin from ui-index.
-    add_header Access-Control-Allow-Origin  *;
-    add_header Access-Control-Allow-Methods 'GET, OPTIONS';
-
-    location = / { return 302 /dashboard/; }
-
-    location /healthz {
-        access_log off;
-        return 200 'ok';
-        add_header Content-Type text/plain;
-    }
-
-    # The dashboard is built for /dashboard/ (ROUTER_BASE/RESOURCE_BASE).
-    location /dashboard/ {
-        alias /usr/share/nginx/html/;
-        try_files $uri $uri/ /dashboard/index.html;
-    }
-}
-EOF
-
-# Runtime TLS provisioning and asset path patching. Runs (as root) via the nginx
-# image's /docker-entrypoint.d/ hook, before nginx starts:
-COPY <<'EOF' /docker-entrypoint.d/40-gen-tls.sh
-#!/bin/sh
-set -e
-VIP="${VIP:-127.0.0.1}"
-
-# 1. Patch the dashboard assets to use the runtime VIP so the browser fetches
-# JS/CSS from this NodePort instead of asking the Harvester backend.
-echo "[init] Patching RESOURCE_BASE in dashboard files to use VIP: $VIP"
-find /usr/share/nginx/html -type f \( -name "*.html" -o -name "*.js" -o -name "*.css" \) -exec \
-    sed -i "s|https://__VIP_PLACEHOLDER__:30090|https://$VIP:30090|g" {} +
-
-# 2. Setup TLS
-CERT_DIR=/etc/nginx/certs
-if [ -s "$CERT_DIR/tls.crt" ] && [ -s "$CERT_DIR/tls.key" ]; then
-  echo "[tls] using mounted certificate at $CERT_DIR"
-  exit 0
-fi
-
-SAN="DNS:localhost,IP:127.0.0.1"
-if echo "$VIP" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
-  SAN="$SAN,IP:$VIP"
-else
-  SAN="$SAN,DNS:$VIP"
-fi
-if [ -n "$CERT_SANS" ]; then
-  SAN="$SAN,$CERT_SANS"
-fi
-echo "[tls] generating self-signed certificate (SAN=$SAN)"
-mkdir -p "$CERT_DIR"
-openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
-  -keyout "$CERT_DIR/tls.key" -out "$CERT_DIR/tls.crt" \
-  -subj "/CN=harvester-node-shutdown-dashboard" \
-  -addext "subjectAltName=$SAN"
-EOF
-RUN chmod +x /docker-entrypoint.d/40-gen-tls.sh
+# Serve the bundle under ASSET_PATH on plain HTTP:8080. Reached two ways:
+#   1. Harvester (server-side)  -> http://<svc>.<ns>.svc:8080${ASSET_PATH}/index.html
+#   2. The browser (assets)     -> https://<harvester-vip>${ASSET_PATH}/js/... via the Ingress
+RUN printf '%s\n' \
+    'server {' \
+    '    listen 8080;' \
+    '    server_name _;' \
+    '    root /usr/share/nginx/html;' \
+    '    absolute_redirect off;' \
+    '' \
+    '    # The dashboard is loaded cross-context by Harvester; keep this permissive.' \
+    '    add_header Access-Control-Allow-Origin  *;' \
+    '    add_header Access-Control-Allow-Methods '"'"'GET, OPTIONS'"'"';' \
+    '' \
+    '    location /healthz {' \
+    '        access_log off;' \
+    '        return 200 '"'"'ok'"'"';' \
+    '        add_header Content-Type text/plain;' \
+    '    }' \
+    '' \
+    "    location ${ASSET_PATH}/ {" \
+    '        alias /usr/share/nginx/html/;' \
+    "        try_files \$uri \$uri/ ${ASSET_PATH}/index.html;" \
+    '    }' \
+    '' \
+    "    location = / { return 302 ${ASSET_PATH}/; }" \
+    '}' \
+    > /etc/nginx/conf.d/default.conf
 
 COPY --from=builder /build/dist/hosted/ /usr/share/nginx/html/
 
-# Drop source maps — dev-only, not runtime-patched, and unneeded in production.
+# Drop source maps — dev-only and unneeded in production.
 RUN find /usr/share/nginx/html -name '*.js.map' -delete
 
-EXPOSE 8443
+# Run nginx UNPRIVILEGED (uid 101). Pre-own everything nginx writes so it never
+# needs to chown at startup: the pod drops ALL capabilities (no CAP_CHOWN), and a
+# root master would fail with:
+#   [emerg] chown("/var/cache/nginx/client_temp", 101) failed (Operation not permitted)
+# Port 8080 is unprivileged, so no root is required at all.
+RUN chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/log/nginx && \
+    touch /var/run/nginx.pid && chown nginx:nginx /var/run/nginx.pid
+
+USER 101
+
+EXPOSE 8080
 CMD ["nginx", "-g", "daemon off;"]

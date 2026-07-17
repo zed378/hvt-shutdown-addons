@@ -1,12 +1,17 @@
 # PowerShell script to publish the Helm charts to GitHub Pages
 # Usage: .\scripts\publish_to_github.ps1
 #
-# Publishes BOTH charts to the same Helm repo (GitHub Pages 'pages' branch):
-#   - Charts/          -> node-shutdown           (the shutdown feature add-on)
-#   - DashboardChart/  -> harvester-dashboard      (the custom UI / ui-index)
+# Each chart is published into a folder on the 'pages' branch, and EVERY folder
+# gets its OWN index.yaml. A chart's add-on `repo:` URL must match its folder:
+#
+#   Charts/          -> node-shutdown        -> <pages>/            (repo root)
+#   DashboardChart/  -> harvester-dashboard  -> <pages>/dashboard/  (own index)
+#   NetbirdChart/    -> netbird              -> <pages>/netbird/    (own index)
 #
 # GitHub Pages serves the Helm chart repository at:
 #   https://zed378.github.io/hvt-shutdown-addons
+#
+# Requirements: helm, git (and push access to the 'pages' branch).
 
 param(
     [string]$Owner    = "zed378",
@@ -23,16 +28,18 @@ $GithubRepo  = "https://github.com/${Owner}/${RepoName}.git"
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
+$ReadmeFile  = Join-Path $ProjectRoot "README.md"
+$TempDir     = Join-Path $env:TEMP ("hvt-shutdown-pages-" + [Guid]::NewGuid().ToString())
 
-# Every chart directory to package + publish.
-$ChartDirs   = @("Charts", "DashboardChart", "NetbirdChart")
-
-$IndexYamlFile = Join-Path $ProjectRoot "index.yaml"
-$ReadmeFile    = Join-Path $ProjectRoot "README.md"
-$TempDir       = Join-Path $env:TEMP ("hvt-shutdown-pages-" + [Guid]::NewGuid().ToString())
+# Chart directory -> pages subfolder. "" means the repo root.
+$Charts = @(
+    @{ Dir = "Charts";         Folder = "" },
+    @{ Dir = "DashboardChart"; Folder = "dashboard" },
+    @{ Dir = "NetbirdChart";   Folder = "netbird" }
+)
 
 Write-Host ""
-Write-Host "=== GitHub Pages Publisher (multi-chart) ===" -ForegroundColor Cyan
+Write-Host "=== GitHub Pages Publisher (per-folder indexes) ===" -ForegroundColor Cyan
 Write-Host "Repository:  $GithubRepo" -ForegroundColor Yellow
 Write-Host "Helm Repo:   $HelmRepoUrl" -ForegroundColor Yellow
 Write-Host ""
@@ -50,34 +57,44 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Git remote: $remoteUrl" -ForegroundColor Green
 Write-Host ""
 
-# ── Step 1: Package each chart + build a combined index.yaml ────────────
-Write-Host "=== [1/2] Packaging charts ===" -ForegroundColor Cyan
-$TgzFiles = @()
-foreach ($dir in $ChartDirs) {
-    $chartPath = Join-Path $ProjectRoot $dir
-    $chartYaml = Join-Path $chartPath "Chart.yaml"
-    if (-not (Test-Path $chartYaml)) {
-        Write-Host "Skip: $dir has no Chart.yaml" -ForegroundColor Yellow; continue
-    }
-    $name    = (Select-String -Path $chartYaml -Pattern '^name:\s*(.+)').Matches.Groups[1].Value.Trim()
-    $version = (Select-String -Path $chartYaml -Pattern '^version:\s*(.+)').Matches.Groups[1].Value.Trim()
-    $tgz     = Join-Path $ProjectRoot "${name}-${version}.tgz"
+# ── Step 1: package each chart into its folder's staging dir, index each ─
+Write-Host "=== [1/2] Packaging + indexing charts ===" -ForegroundColor Cyan
+$Folders = $Charts | ForEach-Object { $_.Folder } | Select-Object -Unique
+$Staged  = @{}
 
-    helm package $chartPath --destination $ProjectRoot
-    if (-not (Test-Path $tgz)) {
-        Write-Host "Error: Failed to package $dir ($name)." -ForegroundColor Red; exit 1
+foreach ($folder in $Folders) {
+    $label = if ($folder) { $folder } else { "root" }
+    $stage = Join-Path $TempDir "stage-$label"
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+    $packagedAny = $false
+    foreach ($c in ($Charts | Where-Object { $_.Folder -eq $folder })) {
+        $chartPath = Join-Path $ProjectRoot $c.Dir
+        $chartYaml = Join-Path $chartPath "Chart.yaml"
+        if (-not (Test-Path $chartYaml)) {
+            Write-Host "Skip: $($c.Dir) has no Chart.yaml" -ForegroundColor Yellow; continue
+        }
+        $name    = (Select-String -Path $chartYaml -Pattern '^name:\s*(.+)').Matches.Groups[1].Value.Trim()
+        $version = (Select-String -Path $chartYaml -Pattern '^version:\s*(.+)').Matches.Groups[1].Value.Trim()
+
+        helm package $chartPath --destination $stage | Out-Null
+        if (-not (Test-Path (Join-Path $stage "${name}-${version}.tgz"))) {
+            Write-Host "Error: Failed to package $($c.Dir) ($name)." -ForegroundColor Red; exit 1
+        }
+        Write-Host ("Packaged: {0} v{1} -> /{2}" -f $name, $version, $label) -ForegroundColor Green
+        $packagedAny = $true
     }
-    Write-Host "Packaged: ${name} v${version}" -ForegroundColor Green
-    $TgzFiles += $tgz
+    if (-not $packagedAny) { continue }
+
+    # Index URL must match where the folder is served from.
+    $indexUrl = if ($folder) { "$HelmRepoUrl/$folder" } else { $HelmRepoUrl }
+    helm repo index --url $indexUrl $stage
+    Write-Host "Indexed: $indexUrl/index.yaml" -ForegroundColor Green
+    $Staged[$folder] = $stage
 }
-
-helm repo index --url $HelmRepoUrl $ProjectRoot
-Write-Host ""
-Write-Host "=== index.yaml ===" -ForegroundColor Cyan
-Get-Content $IndexYamlFile
 Write-Host ""
 
-# ── Step 2: Push all tarballs + index + README to the pages branch ──────
+# ── Step 2: push every folder to the pages branch ───────────────────────
 Write-Host "=== [2/2] Pushing to '$Branch' branch ===" -ForegroundColor Cyan
 $PagesDir = Join-Path $TempDir "pages"
 New-Item -ItemType Directory -Force -Path $PagesDir | Out-Null
@@ -89,33 +106,41 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "Cloned '$Branch' branch." -ForegroundColor Green
 
-foreach ($tgz in $TgzFiles) {
-    Copy-Item $tgz (Join-Path $PagesDir (Split-Path $tgz -Leaf))
+foreach ($folder in @($Staged.Keys)) {
+    $dest = if ($folder) { Join-Path $PagesDir $folder } else { $PagesDir }
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    Copy-Item (Join-Path $Staged[$folder] "*") $dest -Force
+    $label = if ($folder) { "/$folder" } else { "/ (root)" }
+    Write-Host "Staged files into $label" -ForegroundColor Green
 }
-Copy-Item $IndexYamlFile (Join-Path $PagesDir "index.yaml")
 if (Test-Path $ReadmeFile) { Copy-Item $ReadmeFile (Join-Path $PagesDir "README.md") }
 
 Set-Location $PagesDir
 git config user.email "${Owner}@users.noreply.github.com"
 git config user.name  $Owner
 git add -A
-git commit -m "Publish charts: $(($TgzFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ', ')" --allow-empty 2>$null
+git commit -m "Publish charts (per-folder indexes)" --allow-empty 2>$null
 if ($LASTEXITCODE -ne 0) { Write-Host "Nothing to commit." -ForegroundColor Yellow }
 git push origin $Branch
-Write-Host "Pushed: $(($TgzFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ', ') + index.yaml + README.md" -ForegroundColor Green
+Write-Host "Pushed." -ForegroundColor Green
 
 Set-Location $ProjectRoot
 
 # ── Cleanup ────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== Cleaning up ===" -ForegroundColor Yellow
-foreach ($tgz in $TgzFiles) { Remove-Item $tgz -Force -ErrorAction SilentlyContinue }
-Remove-Item $IndexYamlFile -Force -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
 Write-Host "Done." -ForegroundColor Green
 
 Write-Host ""
 Write-Host "=== Published successfully ===" -ForegroundColor Green
-Write-Host "Helm index:  ${HelmRepoUrl}/index.yaml" -ForegroundColor Green
+Write-Host "node-shutdown: ${HelmRepoUrl}/index.yaml"            -ForegroundColor Green
+Write-Host "Dashboard:     ${HelmRepoUrl}/dashboard/index.yaml"  -ForegroundColor Green
+Write-Host "Netbird:       ${HelmRepoUrl}/netbird/index.yaml"    -ForegroundColor Green
 Write-Host ""
-Write-Host "Install order: enable 'harvester-dashboard' add-on (the UI), then feature add-ons (node-shutdown, ...)."
+Write-Host "Add-on repo: URLs must match these folders:" -ForegroundColor Cyan
+Write-Host "  Charts/addon.yaml          repo: ${HelmRepoUrl}"
+Write-Host "  DashboardChart/addon.yaml  repo: ${HelmRepoUrl}/dashboard"
+Write-Host "  NetbirdChart/addon.yaml    repo: ${HelmRepoUrl}/netbird"
+Write-Host ""
+Write-Host "Install order: enable 'harvester-dashboard' (the UI), then feature add-ons (node-shutdown, netbird)."

@@ -1,16 +1,12 @@
 {{- if .Values.uiDashboard.enabled }}
-{{- /* Effective TLS secret: explicit secretName wins; else the auto-copied Harvester cert (see dashboard-tls-copy.yaml); else the container self-signs from VIP. */ -}}
-{{- $tlsSecret := .Values.uiDashboard.tls.secretName }}
-{{- if and (not $tlsSecret) .Values.uiDashboard.tls.copyFrom.name }}
-{{-   $src := lookup "v1" "Secret" .Values.uiDashboard.tls.copyFrom.namespace .Values.uiDashboard.tls.copyFrom.name }}
-{{-   if and $src $src.data (index $src.data "tls.crt") (index $src.data "tls.key") }}
-{{-     $tlsSecret = printf "%s-tls" .Values.uiDashboard.name }}
-{{-   end }}
-{{- end }}
-# Custom Harvester dashboard (fork with the "Node Shutdown" menu) served over HTTPS
-# and exposed via NodePort. Point Harvester Settings -> UI -> ui-index at
-# https://<VIP>:{{ .Values.uiDashboard.nodePort.nodePort }}/dashboard/index.html
-# and set ui-source: External.
+# Custom Harvester dashboard, served as Harvester's ui-index.
+#
+# No TLS anywhere in here — by design:
+#   * Harvester fetches the ui-index HTML server-side over cluster DNS (plain HTTP).
+#   * The browser fetches the JS/CSS through Harvester's OWN nginx ingress on the
+#     VIP:443 at .Values.uiDashboard.assetPath, so they are SAME-ORIGIN with the
+#     Harvester UI and reuse the certificate the operator already trusts.
+# => no self-signed cert, no VIP baked in, no certificate approval.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,27 +34,13 @@ spec:
           image: "{{ .Values.uiDashboard.image.registry }}/{{ .Values.uiDashboard.image.repository }}:{{ .Values.uiDashboard.image.tag }}"
           imagePullPolicy: {{ .Values.uiDashboard.image.pullPolicy }}
           ports:
-            - name: https
-              containerPort: 8443
+            - name: http
+              containerPort: 8080
               protocol: TCP
-          env:
-            # Mode 1 (self-sign): the container signs a cert for this VIP on start.
-            {{- $vip := .Values.uiDashboard.vip }}
-            {{- if not $vip }}
-              {{- $vipSetting := lookup "harvesterhci.io/v1beta1" "Setting" "" "vip" }}
-              {{- if and $vipSetting $vipSetting.value }}
-                {{- $vip = $vipSetting.value }}
-              {{- end }}
-            {{- end }}
-            - name: VIP
-              value: {{ $vip | quote }}
-            - name: CERT_SANS
-              value: {{ .Values.uiDashboard.certSans | quote }}
           livenessProbe:
             httpGet:
               path: /healthz
-              port: 8443
-              scheme: HTTPS
+              port: 8080
             initialDelaySeconds: 10
             periodSeconds: 20
             timeoutSeconds: 5
@@ -66,46 +48,70 @@ spec:
           readinessProbe:
             httpGet:
               path: /healthz
-              port: 8443
-              scheme: HTTPS
+              port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
           resources:
 {{ toYaml .Values.uiDashboard.resources | nindent 12 }}
-          {{- if $tlsSecret }}
-          volumeMounts:
-            # Mode 2 (mounted cert): Harvester's serving cert (auto-copied) or a BYO cert.
-            - name: tls
-              mountPath: /etc/nginx/certs
-              readOnly: true
-          {{- end }}
-      {{- if $tlsSecret }}
-      volumes:
-        - name: tls
-          secret:
-            secretName: {{ $tlsSecret }}
-      {{- end }}
-{{- if .Values.uiDashboard.nodePort.enabled }}
+          # The image runs nginx as uid 101 with everything pre-owned, so it never
+          # needs CAP_CHOWN at startup and no root is required (port 8080).
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
 ---
+# ClusterIP service. Used by BOTH:
+#   * Harvester's server-side ui-index fetch (via cluster DNS), and
+#   * the Ingress below (browser asset requests).
 apiVersion: v1
 kind: Service
+metadata:
+  name: {{ .Values.uiDashboard.name }}-internal
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.uiDashboard.name }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .Values.uiDashboard.name }}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.uiDashboard.internalPort }}
+      targetPort: 8080
+      name: http
+{{- if .Values.uiDashboard.ingress.enabled }}
+---
+# Serve the dashboard assets from Harvester's own origin (the nginx ingress on the
+# VIP:443, same controller that serves the Harvester UI itself). This is what makes
+# the assets same-origin => existing cert => no approval prompt.
+# The path is more specific than Harvester's own "/" rule, so it wins.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
 metadata:
   name: {{ .Values.uiDashboard.name }}
   namespace: {{ .Values.namespace }}
   labels:
     app: {{ .Values.uiDashboard.name }}
 spec:
-  type: NodePort
-  externalTrafficPolicy: {{ .Values.uiDashboard.nodePort.externalTrafficPolicy }}
-  selector:
-    app: {{ .Values.uiDashboard.name }}
-  ports:
-    - protocol: TCP
-      port: {{ .Values.uiDashboard.nodePort.port }}
-      targetPort: {{ .Values.uiDashboard.nodePort.targetPort }}
-      nodePort: {{ .Values.uiDashboard.nodePort.nodePort }}
-      name: https
+  ingressClassName: {{ .Values.uiDashboard.ingress.className | quote }}
+  rules:
+    -
+      {{- if .Values.uiDashboard.ingress.host }}
+      host: {{ .Values.uiDashboard.ingress.host | quote }}
+      {{- end }}
+      http:
+        paths:
+          - path: {{ .Values.uiDashboard.assetPath }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.uiDashboard.name }}-internal
+                port:
+                  number: {{ .Values.uiDashboard.internalPort }}
 {{- end }}
 {{- end }}

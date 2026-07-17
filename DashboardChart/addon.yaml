@@ -5,9 +5,13 @@ metadata:
   namespace: harvester-system
 spec:
   # Set to true to install the custom dashboard and switch Harvester's ui-index to it.
+  # Disabling restores Harvester's default ui-index/ui-source first, then removes the
+  # dashboard — so the UI is never left pointing at a dead URL.
   enabled: false
-  repo: "https://zed378.github.io/hvt-shutdown-addons/"
-  version: "0.1.0"
+  # This chart is served from its own folder on GitHub Pages (its own index.yaml),
+  # separate from the feature add-ons published at the repo root.
+  repo: "https://zed378.github.io/hvt-shutdown-addons/dashboard"
+  version: "0.3.1"
   chart: harvester-dashboard
   valuesContent: |-
     namespace: "harvester-system"
@@ -24,22 +28,20 @@ spec:
         repository: "harvester-dashboard"
         tag: "v1.7-node-shutdown"
         pullPolicy: "Always"
-      # Harvester VIP you browse to (used for the ui-index URL + cert). Leave empty
-      # to auto-ingest from the Harvester `vip` Setting.
-      vip: "10.1.112.50"
-      certSans: ""
-      tls:
-        secretName: ""
-        # Reuse Harvester's own serving cert so :30090 is trusted like the VIP.
-        copyFrom:
-          namespace: "cattle-system"
-          name: "serving-cert"
-      nodePort:
+
+      # Browser fetches the assets from https://<harvester>/custom-dashboard/... via
+      # Harvester's own nginx ingress => same origin => reuses the cert you already
+      # trust => no certificate approval. Baked into the image (Dockerfile.ui
+      # ARG ASSET_PATH); rebuild the image if you change it.
+      assetPath: "/custom-dashboard"
+      internalPort: 8080
+
+      ingress:
         enabled: true
-        port: 8443
-        targetPort: 8443
-        nodePort: 30090
-        externalTrafficPolicy: Cluster
+        className: "nginx"
+        # Empty = match any host, like Harvester's own host-less rancher-expose.
+        host: ""
+
       updateStrategy:
         maxUnavailable: 0
         maxSurge: 1

@@ -2,7 +2,7 @@ apiVersion: v2
 name: harvester-dashboard
 description: Custom Harvester dashboard (hosts add-on menus) served as ui-index
 type: application
-version: 0.1.0
+version: 0.3.1
 appVersion: "v1.7-node-shutdown"
 keywords:
   - harvester

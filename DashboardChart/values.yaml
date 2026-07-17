@@ -1,7 +1,13 @@
 # harvester-dashboard chart — the custom Harvester UI (forked harvester-ui-extension)
-# served over HTTPS and wired in as Harvester's ui-index. Deploy once; feature
-# add-ons (node-shutdown, netbird) contribute their own menus into it, each gated
-# on that add-on being enabled.
+# wired in as Harvester's ui-index. Deploy once; feature add-ons (node-shutdown,
+# netbird) contribute their own menus into it, each gated on that add-on being
+# enabled.
+#
+# NO TLS / NO CERTIFICATE APPROVAL, by design:
+#   * Harvester fetches the ui-index HTML server-side over cluster DNS (plain HTTP).
+#   * The browser fetches the JS/CSS through Harvester's OWN nginx ingress on the
+#     VIP:443 at `assetPath` — same origin as the Harvester UI, so it reuses the
+#     certificate the operator already trusts.
 
 # Namespace the dashboard resources deploy into.
 namespace: "harvester-system"
@@ -17,7 +23,7 @@ uiDashboard:
   name: harvester-dashboard
   replicas: 1
 
-  # Auto-set Harvester ui-index/ui-source on enable, restore on disable.
+  # Auto-set Harvester ui-index/ui-source on enable, restore them on disable.
   manageUiIndex: true
 
   image:
@@ -26,23 +32,26 @@ uiDashboard:
     tag: "v1.7-node-shutdown"
     pullPolicy: "IfNotPresent"
 
-  # TLS — VIP is cluster-specific; set it in addon.yaml. Empty here falls back to
-  # the Harvester `vip` Setting (Helm lookup) or 127.0.0.1.
-  vip: ""
-  certSans: ""
-  tls:
-    # Preferred: reuse Harvester's serving cert (auto-copied from cattle-system).
-    secretName: ""
-    copyFrom:
-      namespace: "cattle-system"
-      name: ""
+  # Where the browser fetches the dashboard's JS/CSS from, served through
+  # Harvester's own ingress => same origin => no separate cert.
+  # IMPORTANT: this is baked into the image at build time (Dockerfile.ui ARG
+  # ASSET_PATH). If you change it here you must rebuild the image with the same
+  # value. It must not collide with Harvester/Rancher paths (/dashboard, /v1, /v3,
+  # /k8s, /api, /apis).
+  assetPath: "/custom-dashboard"
 
-  nodePort:
+  # Cluster-internal HTTP port (ClusterIP service + container). Used by Harvester's
+  # server-side ui-index fetch and as the Ingress backend. Never exposed directly.
+  internalPort: 8080
+
+  ingress:
     enabled: true
-    port: 8443
-    targetPort: 8443
-    nodePort: 30090
-    externalTrafficPolicy: Cluster
+    # RKE2/Harvester ships the nginx ingress controller; its LoadBalancer
+    # (kube-system/ingress-expose) is what serves https://<VIP>:443.
+    className: "nginx"
+    # Leave empty to match any host, exactly like Harvester's own host-less
+    # `rancher-expose` ingress. Our path is more specific than its "/", so it wins.
+    host: ""
 
   updateStrategy:
     maxUnavailable: 0
