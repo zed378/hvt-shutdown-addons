@@ -1,0 +1,93 @@
+apiVersion: harvesterhci.io/v1beta1
+kind: Addon
+metadata:
+  name: vpn
+  namespace: harvester-system
+spec:
+  # One add-on for every VPN provider. Enable it, then turn on the provider(s) you
+  # want from the dashboard's "VPN" menu group (NetBird / Tailscale / ZeroTier /
+  # OpenVPN) — each page writes its own section of valuesContent below.
+  #
+  # A provider only deploys once it is enabled AND configured, so enabling this
+  # add-on on its own is a no-op.
+  enabled: false
+  # This chart is served from its own folder on GitHub Pages (its own index.yaml).
+  repo: "https://zed378.github.io/hvt-shutdown-addons/vpn"
+  version: "0.1.0"
+  chart: vpn
+  valuesContent: |-
+    vpn:
+      namespace: harvester-system
+
+      netbird:
+        enabled: false
+        name: netbird
+        image:
+          repository: "netbirdio/netbird"
+          tag: "latest"
+          pullPolicy: "IfNotPresent"
+        managementUrl: ""
+        setupKey: ""
+        resources:
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+
+      tailscale:
+        enabled: false
+        name: tailscale
+        image:
+          repository: "tailscale/tailscale"
+          tag: "latest"
+          pullPolicy: "IfNotPresent"
+        authKey: ""
+        loginServer: ""
+        advertiseRoutes: ""
+        acceptRoutes: false
+        acceptDns: false
+        extraArgs: ""
+        resources:
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+
+      zerotier:
+        enabled: false
+        name: zerotier
+        image:
+          repository: "zerotier/zerotier"
+          tag: "latest"
+          pullPolicy: "IfNotPresent"
+        networkId: ""
+        resources:
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+
+      openvpn:
+        enabled: false
+        name: openvpn
+        image:
+          repository: "dperson/openvpn-client"
+          tag: "latest"
+          pullPolicy: "IfNotPresent"
+        config: ""
+        username: ""
+        password: ""
+        extraArgs: ""
+        resources:
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+          requests:
+            cpu: "50m"
+            memory: "64Mi"

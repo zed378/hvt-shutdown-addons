@@ -6,7 +6,7 @@
 #
 #   Charts/          -> node-shutdown        -> <pages>/            (repo root)
 #   DashboardChart/  -> harvester-dashboard  -> <pages>/dashboard/  (own index)
-#   NetbirdChart/    -> netbird              -> <pages>/netbird/    (own index)
+#   VpnChart/        -> vpn                  -> <pages>/vpn/       (own index)
 #
 # GitHub Pages serves the Helm chart repository at:
 #   https://zed378.github.io/hvt-shutdown-addons
@@ -35,7 +35,7 @@ $TempDir     = Join-Path $env:TEMP ("hvt-shutdown-pages-" + [Guid]::NewGuid().To
 $Charts = @(
     @{ Dir = "Charts";         Folder = "" },
     @{ Dir = "DashboardChart"; Folder = "dashboard" },
-    @{ Dir = "NetbirdChart";   Folder = "netbird" }
+    @{ Dir = "VpnChart";       Folder = "vpn" }
 )
 
 Write-Host ""
@@ -136,11 +136,11 @@ Write-Host ""
 Write-Host "=== Published successfully ===" -ForegroundColor Green
 Write-Host "node-shutdown: ${HelmRepoUrl}/index.yaml"            -ForegroundColor Green
 Write-Host "Dashboard:     ${HelmRepoUrl}/dashboard/index.yaml"  -ForegroundColor Green
-Write-Host "Netbird:       ${HelmRepoUrl}/netbird/index.yaml"    -ForegroundColor Green
+Write-Host "VPN:           ${HelmRepoUrl}/vpn/index.yaml"        -ForegroundColor Green
 Write-Host ""
 Write-Host "Add-on repo: URLs must match these folders:" -ForegroundColor Cyan
 Write-Host "  Charts/addon.yaml          repo: ${HelmRepoUrl}"
 Write-Host "  DashboardChart/addon.yaml  repo: ${HelmRepoUrl}/dashboard"
-Write-Host "  NetbirdChart/addon.yaml    repo: ${HelmRepoUrl}/netbird"
+Write-Host "  VpnChart/addon.yaml        repo: ${HelmRepoUrl}/vpn"
 Write-Host ""
-Write-Host "Install order: enable 'harvester-dashboard' (the UI), then feature add-ons (node-shutdown, netbird)."
+Write-Host "Install order: enable 'harvester-dashboard' (the UI), then feature add-ons (node-shutdown, vpn)."

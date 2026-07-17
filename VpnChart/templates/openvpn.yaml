@@ -1,0 +1,89 @@
+{{- $ov := .Values.vpn.openvpn }}
+{{- if $ov.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $ov.name }}-config
+  namespace: {{ .Values.vpn.namespace }}
+  labels:
+    app: {{ $ov.name }}
+    vpn-provider: openvpn
+type: Opaque
+stringData:
+  client.ovpn: |
+{{ $ov.config | default "" | indent 4 }}
+  {{- if $ov.username }}
+  # openvpn's --auth-user-pass file format: username on line 1, password on line 2.
+  auth.txt: {{ printf "%s\n%s\n" $ov.username $ov.password | quote }}
+  {{- end }}
+{{- end }}
+{{- if and $ov.enabled $ov.config }}
+---
+# Deploys only once a client profile is set (see netbird.yaml for the rationale).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $ov.name }}
+  namespace: {{ .Values.vpn.namespace }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $ov.name }}
+  namespace: {{ .Values.vpn.namespace }}
+  labels:
+    app: {{ $ov.name }}
+    vpn-provider: openvpn
+spec:
+  selector:
+    matchLabels:
+      app: {{ $ov.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $ov.name }}
+        vpn-provider: openvpn
+      annotations:
+        # Roll the pods when the profile changes — the config is mounted from a
+        # Secret, and openvpn only reads it at startup.
+        checksum/config: {{ printf "%s%s%s" $ov.config $ov.username $ov.password | sha256sum }}
+    spec:
+      serviceAccountName: {{ $ov.name }}
+      {{- include "vpn.agentPodBase" . | nindent 6 }}
+      containers:
+        - name: openvpn
+          image: "{{ $ov.image.repository }}:{{ $ov.image.tag }}"
+          imagePullPolicy: {{ $ov.image.pullPolicy }}
+          securityContext:
+            privileged: true
+          # Invoke openvpn explicitly rather than relying on the image's entrypoint,
+          # so behaviour doesn't depend on which openvpn-client image is used — any
+          # image shipping the `openvpn` binary works.
+          command: ["openvpn"]
+          args:
+            - "--config"
+            - "/etc/openvpn/client.ovpn"
+            {{- if $ov.username }}
+            - "--auth-user-pass"
+            - "/etc/openvpn/auth.txt"
+            {{- end }}
+            {{- range (splitList " " ($ov.extraArgs | default "" | trim)) }}
+            {{- if . }}
+            - {{ . | quote }}
+            {{- end }}
+            {{- end }}
+          resources:
+{{ toYaml $ov.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openvpn
+              readOnly: true
+            {{- include "vpn.tunMount" . | nindent 12 }}
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ $ov.name }}-config
+            # Credentials — don't leave them world-readable in the container.
+            defaultMode: 0400
+        {{- include "vpn.tunVolume" . | nindent 8 }}
+{{- end }}

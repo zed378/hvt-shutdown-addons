@@ -1,0 +1,83 @@
+{{- $nb := .Values.vpn.netbird }}
+{{- if $nb.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $nb.name }}-config
+  namespace: {{ .Values.vpn.namespace }}
+  labels:
+    app: {{ $nb.name }}
+    vpn-provider: netbird
+type: Opaque
+stringData:
+  management-url: {{ $nb.managementUrl | quote }}
+  setup-key: {{ $nb.setupKey | quote }}
+{{- end }}
+{{- if and $nb.enabled $nb.setupKey $nb.managementUrl }}
+---
+# The agent only deploys once BOTH a management URL and a setup key are set, so
+# enabling the add-on with no config leaves just the Secret behind instead of
+# crash-looping a DaemonSet on every node.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $nb.name }}
+  namespace: {{ .Values.vpn.namespace }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $nb.name }}
+  namespace: {{ .Values.vpn.namespace }}
+  labels:
+    app: {{ $nb.name }}
+    vpn-provider: netbird
+spec:
+  selector:
+    matchLabels:
+      app: {{ $nb.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $nb.name }}
+        vpn-provider: netbird
+    spec:
+      serviceAccountName: {{ $nb.name }}
+      {{- include "vpn.agentPodBase" . | nindent 6 }}
+      containers:
+        - name: netbird
+          image: "{{ $nb.image.repository }}:{{ $nb.image.tag }}"
+          imagePullPolicy: {{ $nb.image.pullPolicy }}
+          securityContext:
+            privileged: true
+          env:
+            - name: NB_SETUP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $nb.name }}-config
+                  key: setup-key
+            - name: NB_MANAGEMENT_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $nb.name }}-config
+                  key: management-url
+            # Enroll each node under its own name.
+            - name: NB_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+{{ toYaml $nb.resources | nindent 12 }}
+          volumeMounts:
+            # Persist the peer identity so a restart re-uses the peer instead of
+            # enrolling a brand new one on every pod restart.
+            - name: config
+              mountPath: /etc/netbird
+            {{- include "vpn.tunMount" . | nindent 12 }}
+      volumes:
+        - name: config
+          hostPath:
+            path: /etc/netbird
+            type: DirectoryOrCreate
+        {{- include "vpn.tunVolume" . | nindent 8 }}
+{{- end }}

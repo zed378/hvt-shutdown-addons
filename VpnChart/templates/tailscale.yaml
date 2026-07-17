@@ -1,0 +1,101 @@
+{{- $ts := .Values.vpn.tailscale }}
+{{- if $ts.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $ts.name }}-config
+  namespace: {{ .Values.vpn.namespace }}
+  labels:
+    app: {{ $ts.name }}
+    vpn-provider: tailscale
+type: Opaque
+stringData:
+  auth-key: {{ $ts.authKey | quote }}
+{{- end }}
+{{- if and $ts.enabled $ts.authKey }}
+---
+# Deploys only once an auth key is set (see netbird.yaml for the rationale).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $ts.name }}
+  namespace: {{ .Values.vpn.namespace }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $ts.name }}
+  namespace: {{ .Values.vpn.namespace }}
+  labels:
+    app: {{ $ts.name }}
+    vpn-provider: tailscale
+spec:
+  selector:
+    matchLabels:
+      app: {{ $ts.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $ts.name }}
+        vpn-provider: tailscale
+    spec:
+      serviceAccountName: {{ $ts.name }}
+      {{- include "vpn.agentPodBase" . | nindent 6 }}
+      containers:
+        - name: tailscale
+          image: "{{ $ts.image.repository }}:{{ $ts.image.tag }}"
+          imagePullPolicy: {{ $ts.image.pullPolicy }}
+          securityContext:
+            privileged: true
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ts.name }}-config
+                  key: auth-key
+            - name: TS_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # Persist node state on the host so a restart keeps the same machine
+            # rather than registering a duplicate in the tailnet.
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+            # Kernel WireGuard, not userspace — we have /dev/net/tun + privileged.
+            - name: TS_USERSPACE
+              value: "false"
+            # Off by default: replacing a node's resolv.conf with the tailnet's DNS
+            # can break cluster DNS resolution on that node.
+            - name: TS_ACCEPT_DNS
+              value: {{ $ts.acceptDns | quote }}
+            {{- if $ts.advertiseRoutes }}
+            - name: TS_ROUTES
+              value: {{ $ts.advertiseRoutes | quote }}
+            {{- end }}
+            {{- $args := list }}
+            {{- if $ts.loginServer }}
+              {{- $args = append $args (printf "--login-server=%s" $ts.loginServer) }}
+            {{- end }}
+            {{- if $ts.acceptRoutes }}
+              {{- $args = append $args "--accept-routes" }}
+            {{- end }}
+            {{- if $ts.extraArgs }}
+              {{- $args = append $args $ts.extraArgs }}
+            {{- end }}
+            {{- if $args }}
+            - name: TS_EXTRA_ARGS
+              value: {{ join " " $args | quote }}
+            {{- end }}
+          resources:
+{{ toYaml $ts.resources | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/tailscale
+            {{- include "vpn.tunMount" . | nindent 12 }}
+      volumes:
+        - name: state
+          hostPath:
+            path: /var/lib/tailscale
+            type: DirectoryOrCreate
+        {{- include "vpn.tunVolume" . | nindent 8 }}
+{{- end }}

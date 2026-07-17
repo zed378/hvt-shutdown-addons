@@ -1,0 +1,111 @@
+# vpn chart — a SINGLE add-on that can run any combination of VPN agents on every
+# Harvester node. Each provider is an independent DaemonSet, toggled by its own
+# `enabled` flag, and configured from the dashboard's "VPN" menu group (which writes
+# this add-on's valuesContent) or here directly.
+#
+# Every provider is gated on BOTH `enabled` AND its required config being present,
+# so enabling the add-on with no config deploys nothing rather than crash-looping.
+#
+# All agents run hostNetwork + privileged with /dev/net/tun: they manage a real
+# network interface on the node itself, which is the point of a node-level VPN.
+
+vpn:
+  namespace: harvester-system
+
+  # ── NetBird (WireGuard mesh) ─────────────────────────────────────────
+  # Requires: managementUrl + setupKey
+  netbird:
+    enabled: false
+    name: netbird
+    image:
+      repository: "netbirdio/netbird"
+      tag: "latest"
+      pullPolicy: "IfNotPresent"
+    # Management URL / "domain": https://api.netbird.io (cloud) or your self-hosted URL.
+    managementUrl: ""
+    # Use a REUSABLE setup key — every node enrolls with the same one.
+    setupKey: ""
+    resources:
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+
+  # ── Tailscale (WireGuard mesh) ───────────────────────────────────────
+  # Requires: authKey
+  tailscale:
+    enabled: false
+    name: tailscale
+    image:
+      repository: "tailscale/tailscale"
+      tag: "latest"
+      pullPolicy: "IfNotPresent"
+    # Use a REUSABLE (ideally ephemeral=false) auth key.
+    authKey: ""
+    # Leave empty for Tailscale's own control plane; set to a Headscale URL to
+    # self-host (passed through as --login-server).
+    loginServer: ""
+    # Advertise these CIDRs as subnet routes, e.g. "10.0.0.0/24,10.1.0.0/24".
+    # Still needs approval in the Tailscale admin console.
+    advertiseRoutes: ""
+    # Accept routes advertised by other nodes.
+    acceptRoutes: false
+    # Accept the tailnet's DNS config. Off by default: overwriting a Harvester
+    # node's resolv.conf can break cluster DNS.
+    acceptDns: false
+    extraArgs: ""
+    resources:
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+
+  # ── ZeroTier ─────────────────────────────────────────────────────────
+  # Requires: networkId
+  zerotier:
+    enabled: false
+    name: zerotier
+    image:
+      repository: "zerotier/zerotier"
+      tag: "latest"
+      pullPolicy: "IfNotPresent"
+    # The 16-character ZeroTier network ID to join. Nodes still need authorizing
+    # in ZeroTier Central unless the network is public.
+    networkId: ""
+    resources:
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+
+  # ── OpenVPN (client) ─────────────────────────────────────────────────
+  # Requires: config
+  openvpn:
+    enabled: false
+    name: openvpn
+    image:
+      # Any image shipping the `openvpn` binary works — the command below is
+      # explicit, so the image's own entrypoint is bypassed.
+      repository: "dperson/openvpn-client"
+      tag: "latest"
+      pullPolicy: "IfNotPresent"
+    # The FULL contents of a client .ovpn profile (inline certs and all).
+    # Mounted at /etc/openvpn/client.ovpn.
+    config: ""
+    # Only needed if the profile uses `auth-user-pass`.
+    username: ""
+    password: ""
+    extraArgs: ""
+    resources:
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+      requests:
+        cpu: "50m"
+        memory: "64Mi"

@@ -7,7 +7,7 @@
 #
 #   Charts/          -> node-shutdown        -> <pages>/            (repo root)
 #   DashboardChart/  -> harvester-dashboard  -> <pages>/dashboard/  (own index)
-#   NetbirdChart/    -> netbird              -> <pages>/netbird/    (own index)
+#   VpnChart/        -> vpn                  -> <pages>/vpn/       (own index)
 #
 # GitHub Pages serves the Helm chart repository at:
 #   https://zed378.github.io/hvt-shutdown-addons
@@ -33,7 +33,7 @@ README_FILE="$PROJECT_ROOT/README.md"
 # "<chart dir>:<pages folder>"  —  the folder "root" means the repo root.
 CHARTS=(
   "Charts:root"
-  "NetbirdChart:netbird"
+  "VpnChart:vpn"
   "DashboardChart:dashboard"
 )
 
@@ -129,11 +129,11 @@ echo ""
 echo "=== Published successfully ==="
 echo "node-shutdown: ${HELM_REPO_URL}/index.yaml"
 echo "Dashboard:     ${HELM_REPO_URL}/dashboard/index.yaml"
-echo "Netbird:       ${HELM_REPO_URL}/netbird/index.yaml"
+echo "VPN:           ${HELM_REPO_URL}/vpn/index.yaml"
 echo ""
 echo "Add-on repo: URLs must match these folders:"
 echo "  Charts/addon.yaml          repo: ${HELM_REPO_URL}"
-echo "  NetbirdChart/addon.yaml    repo: ${HELM_REPO_URL}/netbird"
+echo "  VpnChart/addon.yaml        repo: ${HELM_REPO_URL}/vpn"
 echo "  DashboardChart/addon.yaml  repo: ${HELM_REPO_URL}/dashboard"
 echo ""
 echo "Install order: enable 'harvester-dashboard' (the UI), then feature add-ons."

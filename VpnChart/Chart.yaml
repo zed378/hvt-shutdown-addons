@@ -1,13 +1,16 @@
 apiVersion: v2
-name: netbird
-description: NetBird mesh VPN agent (DaemonSet) for Harvester nodes
+name: vpn
+description: VPN agents (NetBird, Tailscale, ZeroTier, OpenVPN) for Harvester nodes
 type: application
 version: 0.1.0
 appVersion: "latest"
 keywords:
   - harvester
-  - netbird
   - vpn
+  - netbird
+  - tailscale
+  - zerotier
+  - openvpn
   - wireguard
 maintainers:
   - name: hvt-shutdown-addons

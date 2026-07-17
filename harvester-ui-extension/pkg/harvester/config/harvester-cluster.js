@@ -43,6 +43,23 @@ const TEMPLATE = HCI.VM_VERSION;
 const MONITORING_GROUP = 'Monitoring & Logging::Monitoring';
 const LOGGING_GROUP = 'Monitoring & Logging::Logging';
 
+// The single `vpn` add-on ships several agents; each gets a page in this group.
+const VPN_GROUP = 'vpn';
+const VPN_PROVIDERS = [
+  {
+    name: 'netbird', labelKey: 'harvester.vpn.netbird.label', weight: 4
+  },
+  {
+    name: 'tailscale', labelKey: 'harvester.vpn.tailscale.label', weight: 3
+  },
+  {
+    name: 'zerotier', labelKey: 'harvester.vpn.zerotier.label', weight: 2
+  },
+  {
+    name: 'openvpn', labelKey: 'harvester.vpn.openvpn.label', weight: 1
+  },
+];
+
 export const PRODUCT_NAME = 'harvester';
 
 export const IP_POOL_HEADERS = [
@@ -202,24 +219,29 @@ export function init($plugin, store) {
     types:        ['node-shutdown'],
   });
 
-  // netbird add-on — custom page in the "Advanced" nav group, gated on the
-  // netbird add-on being enabled (same pattern as node-shutdown).
-  virtualType({
-    labelKey:   'harvester.netbird.label',
-    group:      'advanced',
-    namespaced: false,
-    name:       'netbird',
-    weight:     -98,
-    icon:       'globe',
-    route:      { name: `${ PRODUCT_NAME }-c-cluster-netbird` },
-    exact:      true,
+  // vpn add-on — ONE add-on providing several VPN agents, each with its own page
+  // in a dedicated "VPN" nav group. The whole group is gated on that single add-on
+  // being enabled, so all four entries appear/disappear together (which provider
+  // actually deploys is then a per-provider toggle on its page).
+  VPN_PROVIDERS.forEach(({ name, labelKey, weight }) => {
+    virtualType({
+      labelKey,
+      group:      VPN_GROUP,
+      namespaced: false,
+      name,
+      weight,
+      icon:       'globe',
+      route:      { name: `${ PRODUCT_NAME }-c-cluster-vpn-${ name }` },
+      exact:      true,
+    });
   });
   registerAddonNav(store, PRODUCT_NAME, {
-    addonName:    'netbird',
+    addonName:    'vpn',
     resourceType: HCI.ADD_ONS,
-    navGroup:     'advanced',
-    types:        ['netbird'],
+    navGroup:     VPN_GROUP,
+    types:        VPN_PROVIDERS.map((p) => p.name),
   });
+  weightGroup(VPN_GROUP, 250, true);
 
   basicType([HCI.VM]);
   configureType(HCI.VM, { canYaml: false });

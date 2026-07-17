@@ -1,0 +1,55 @@
+{{- $zt := .Values.vpn.zerotier }}
+{{- if and $zt.enabled $zt.networkId }}
+# Deploys only once a network ID is set (see netbird.yaml for the rationale).
+# ZeroTier takes no secret: the network ID is not sensitive, and authorization
+# happens in ZeroTier Central rather than via a pre-shared key.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $zt.name }}
+  namespace: {{ .Values.vpn.namespace }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $zt.name }}
+  namespace: {{ .Values.vpn.namespace }}
+  labels:
+    app: {{ $zt.name }}
+    vpn-provider: zerotier
+spec:
+  selector:
+    matchLabels:
+      app: {{ $zt.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $zt.name }}
+        vpn-provider: zerotier
+    spec:
+      serviceAccountName: {{ $zt.name }}
+      {{- include "vpn.agentPodBase" . | nindent 6 }}
+      containers:
+        - name: zerotier
+          image: "{{ $zt.image.repository }}:{{ $zt.image.tag }}"
+          imagePullPolicy: {{ $zt.image.pullPolicy }}
+          securityContext:
+            privileged: true
+          # The image's entrypoint joins each network ID passed as an argument.
+          args:
+            - {{ $zt.networkId | quote }}
+          resources:
+{{ toYaml $zt.resources | nindent 12 }}
+          volumeMounts:
+            # Persist identity.secret — losing it means the node rejoins as a NEW
+            # member and has to be re-authorized in ZeroTier Central.
+            - name: state
+              mountPath: /var/lib/zerotier-one
+            {{- include "vpn.tunMount" . | nindent 12 }}
+      volumes:
+        - name: state
+          hostPath:
+            path: /var/lib/zerotier-one
+            type: DirectoryOrCreate
+        {{- include "vpn.tunVolume" . | nindent 8 }}
+{{- end }}

@@ -1,6 +1,6 @@
 # harvester-dashboard chart — the custom Harvester UI (forked harvester-ui-extension)
 # wired in as Harvester's ui-index. Deploy once; feature add-ons (node-shutdown,
-# netbird) contribute their own menus into it, each gated on that add-on being
+# vpn) contribute their own menus into it, each gated on that add-on being
 # enabled.
 #
 # NO TLS / NO CERTIFICATE APPROVAL, by design:

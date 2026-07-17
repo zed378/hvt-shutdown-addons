@@ -16,6 +16,7 @@ unsupported:
 nav:
   group:
     networks: Networks
+    vpn: VPN
     backupAndSnapshot: Backup and Snapshots
     Monitoring: Monitoring
     Logging: Logging
@@ -65,8 +66,15 @@ dialog:
 harvester:
   nodeShutdown:
     label: Node Shutdown
-  netbird:
-    label: NetBird
+  vpn:
+    netbird:
+      label: NetBird
+    tailscale:
+      label: Tailscale
+    zerotier:
+      label: ZeroTier
+    openvpn:
+      label: OpenVPN
   branding:
     logos:
       tip: 'Upload a logo to replace the Harvester logo in the top-level navigation header. Image height should be 21 pixels with a max width of 200 pixels. Max file size is 20KB. Accepted formats: JPEG, PNG, SVG.'
