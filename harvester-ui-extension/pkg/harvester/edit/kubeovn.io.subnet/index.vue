@@ -9,7 +9,7 @@ import Loading from '@shell/components/Loading';
 import CreateEditView from '@shell/mixins/create-edit-view';
 import { RadioGroup } from '@components/Form/Radio';
 import { NETWORK_PROTOCOL, NETWORK_TYPE } from '@pkg/harvester/config/types';
-import { set } from '@shell/utils/object';
+import { set, remove } from '@shell/utils/object';
 import ArrayList from '@shell/components/form/ArrayList';
 import { allHash } from '@shell/utils/promise';
 import { HCI } from '../../types';
@@ -43,18 +43,20 @@ export default {
   created() {
     const vpc = this.$route.query.vpc || '';
     const enableDHCP = this.value?.spec?.enableDHCP || false;
+    const natOutgoing = this.value?.spec?.natOutgoing || false;
 
     set(this.value.spec, 'enableDHCP', enableDHCP);
     set(this.value, 'spec', this.value.spec || {
-      cidrBlock:  '',
-      protocol:   NETWORK_PROTOCOL.IPv4,
-      provider:   '',
+      cidrBlock:    '',
+      protocol:     NETWORK_PROTOCOL.IPv4,
+      provider:     '',
       vpc,
-      gatewayIP:  '',
-      excludeIps: [],
-      private:    false,
+      gateway:      '',
+      excludeIps:   [],
+      private:      false,
       enableDHCP,
-      acls:       []
+      natOutgoing,
+      acls:         []
     });
   },
 
@@ -62,8 +64,9 @@ export default {
     const inStore = this.$store.getters['currentProduct'].inStore;
 
     const hash = {
-      vpc: this.$store.dispatch(`${ inStore }/findAll`, { type: HCI.VPC }),
-      nad: this.$store.dispatch(`${ inStore }/findAll`, { type: NETWORK_ATTACHMENT }),
+      vpc:   this.$store.dispatch(`${ inStore }/findAll`, { type: HCI.VPC }),
+      nad:   this.$store.dispatch(`${ inStore }/findAll`, { type: NETWORK_ATTACHMENT }),
+      vlans: this.$store.dispatch(`${ inStore }/findAll`, { type: HCI.VLAN }),
     };
 
     await allHash(hash);
@@ -129,6 +132,22 @@ export default {
         label: n.id,
         value: n.id,
       }));
+    },
+    natOutgoingDisabled() {
+      // Disable the NAT Outgoing option when the subnet belongs to the ovn-cluster VPC and its name is join or ovn-default.
+      return this.value?.spec?.vpc === 'ovn-cluster' && ['join', 'ovn-default'].includes(this.value?.metadata?.name);
+    },
+
+    vlanOptions() {
+      const inStore = this.$store.getters['currentProduct'].inStore;
+      const vlans = this.$store.getters[`${ inStore }/all`](HCI.VLAN) || [];
+
+      const options = vlans.map((vlan) => ({
+        label: vlan.id,
+        value: vlan.id,
+      }));
+
+      return [{ label: this.t('generic.none'), value: '' }, ...options];
     }
   },
 
@@ -143,6 +162,14 @@ export default {
     }
   },
   methods: {
+    onVlanChange(value) {
+      if (value === '') {
+        remove(this.value.spec, 'vlan');
+      } else {
+        set(this.value, 'spec.vlan', value);
+      }
+    },
+
     async saveSubnet(buttonCb) {
       const errors = [];
       const name = this.value?.metadata?.name;
@@ -264,6 +291,17 @@ export default {
               :mode="mode"
             />
           </div>
+          <div class="col span-6">
+            <LabeledSelect
+              :value="value.spec.vlan ?? ''"
+              class="mb-20"
+              :options="vlanOptions"
+              :placeholder="t('harvester.subnet.vlan.placeholder')"
+              :label="t('harvester.subnet.vlan.label')"
+              :mode="mode"
+              @update:value="onVlanChange"
+            />
+          </div>
         </div>
         <div class="row mt-20">
           <div class="col span-6">
@@ -302,6 +340,20 @@ export default {
                 :raw="true"
               />
             </Banner>
+          </div>
+        </div>
+        <div class="row mt-20">
+          <div class="col span-6">
+            <RadioGroup
+              v-model:value="value.spec.natOutgoing"
+              name="enableExternalConnectivity"
+              :disabled="natOutgoingDisabled"
+              :options="[true, false]"
+              :label="t('harvester.subnet.externalConnectivity.label')"
+              :labels="[t('generic.enabled'), t('generic.disabled')]"
+              :mode="mode"
+              :tooltip="t('harvester.subnet.externalConnectivity.tooltip')"
+            />
           </div>
         </div>
         <div class="row mt-20">

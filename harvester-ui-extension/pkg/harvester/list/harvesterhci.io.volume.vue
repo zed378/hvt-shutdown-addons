@@ -70,8 +70,13 @@ export default {
       return schema;
     },
     filterRows() {
-      // we only show the non golden image PVCs in the list
-      return this.rows.filter((pvc) => !pvc?.isGoldenImageVolume);
+      return this.rows.filter((pvc) => {
+        if (pvc?.isGoldenImageVolume || pvc?.isCDIPopulatorVolume) {
+          return false;
+        }
+
+        return true;
+      });
     },
     headers() {
       return [
@@ -101,8 +106,8 @@ export default {
           name:     'AttachedVM',
           labelKey: 'tableHeaders.attachedVM',
           type:     'attached',
-          value:    'spec.claimRef',
-          sort:     'name',
+          value:    'attachVMName',
+          sort:     'attachVMName',
         },
         {
           name:      'VolumeSnapshotCounts',
@@ -129,8 +134,8 @@ export default {
       return row?.attachVM?.detailLocation;
     },
 
-    getVMName(row) {
-      return row.attachVM?.metadata?.name || '';
+    getAttachedVMName(row) {
+      return row.attachVMName || '';
     },
 
     isInternalStorageClass(storageClassName) {
@@ -168,10 +173,10 @@ export default {
     <template #cell:AttachedVM="{row}">
       <div>
         <router-link
-          v-if="getVMName(row)"
+          v-if="getAttachedVMName(row)"
           :to="goTo(row)"
         >
-          {{ getVMName(row) }}
+          {{ getAttachedVMName(row) }}
         </router-link>
       </div>
     </template>

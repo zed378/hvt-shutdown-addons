@@ -5,9 +5,11 @@ import LabeledSelect from '@shell/components/form/LabeledSelect';
 import Banner from '@components/Banner/Banner.vue';
 import remove from 'lodash/remove';
 import { set } from '@shell/utils/object';
+import { uniq } from '@shell/utils/array';
 import { HCI } from '../../../types';
 import DeviceList from './DeviceList';
 import CompatibilityMatrix from '../CompatibilityMatrix';
+import MessageLink from '@shell/components/MessageLink';
 
 export default {
   name:       'VirtualMachinePCIDevices',
@@ -15,7 +17,8 @@ export default {
     LabeledSelect,
     DeviceList,
     CompatibilityMatrix,
-    Banner
+    Banner,
+    MessageLink
   },
   props: {
     mode: {
@@ -50,26 +53,29 @@ export default {
     }
 
     const selectedDevices = [];
-    const oldFormatDevices = [];
 
     const vmDevices = this.value?.domain?.devices?.hostDevices || [];
-    const otherDevices = this.otherDevices(vmDevices).map(({ name }) => name);
+    const vmDeviceNames = vmDevices.map(({ name }) => name);
 
-    vmDevices.forEach(({ name, deviceName }) => {
-      const checkName = (deviceName || '').split('/')?.[1];
+    this.pciDevices.forEach((row) => {
+      row.allowDisable = !vmDeviceNames.includes(row.metadata.name);
+    });
 
-      if (checkName && name.includes(checkName) && !otherDevices.includes(name)) {
-        oldFormatDevices.push(name);
-      } else if (this.enabledDevices.find((device) => device?.metadata?.name === name)) {
+    // When off, read from spec; otherwise the spec name is a placeholder ('provisioned'),
+    // so read the real allocated device names from the deviceAllocationDetails annotation.
+    const hostDeviceNames = this.vm.isOff ? [
+      ...vmDevices.map(({ name }) => name),
+    ] : [
+      ...Object.values(this.vm?.provisionedHostDevices || {}).reduce((acc, devices) => [...acc, ...devices], []),
+    ];
+
+    uniq(hostDeviceNames).forEach((name) => {
+      if (this.enabledDevices.find((device) => device?.metadata?.name === name)) {
         selectedDevices.push(name);
       }
     });
 
-    if (oldFormatDevices.length > 0) {
-      this.oldFormatDevices = oldFormatDevices;
-    } else {
-      this.selectedDevices = selectedDevices;
-    }
+    this.selectedDevices = selectedDevices;
   },
 
   data() {
@@ -80,7 +86,6 @@ export default {
       selectedDevices:  [],
       pciDeviceSchema:  this.$store.getters['harvester/schemaFor'](HCI.PCI_DEVICE),
       showMatrix:       false,
-      oldFormatDevices: [],
     };
   },
 
@@ -131,6 +136,13 @@ export default {
       }, {});
 
       return inUse;
+    },
+
+    toVGpuDevicesPage() {
+      return {
+        name:   'harvester-c-cluster-resource',
+        params: { cluster: this.$store.getters['clusterId'], resource: HCI.VGPU_DEVICE },
+      };
     },
 
     devicesByNode() {
@@ -185,11 +197,6 @@ export default {
       });
     },
 
-    oldFormatDevicesHTML() {
-      return this.oldFormatDevices.map((device) => {
-        return `<li>${ device }</li>`;
-      }).join('');
-    },
   },
 
   methods: {
@@ -213,95 +220,88 @@ export default {
 
 <template>
   <div>
-    <div
-      v-if="oldFormatDevices.length > 0"
-      class="row"
-    >
+    <div class="row">
       <div class="col span-12">
-        <Banner color="warning">
-          <p v-clean-html="t('harvester.pci.oldFormatDevices.help', {oldFormatDevicesHTML}, true)" />
+        <Banner color="info">
+          <MessageLink
+            :to="toVGpuDevicesPage"
+            prefix-label="harvester.pci.howToUseDeviceInVMCreation.prefix"
+            middle-label="harvester.pci.howToUseDeviceInVMCreation.middle"
+            suffix-label="harvester.pci.howToUseDeviceInVMCreation.suffix"
+          />
+        </Banner>
+        <Banner
+          v-if="selectedDevices.length > 0"
+          color="info"
+        >
+          <t k="harvester.pci.deviceInTheSameHost" />
         </Banner>
       </div>
     </div>
-    <div v-else>
+    <template v-if="enabledDevices.length">
       <div class="row">
-        <div class="col span-12">
-          <Banner color="info">
-            <t k="harvester.pci.howToUseDevice" />
-          </Banner>
-          <Banner
-            v-if="selectedDevices.length > 0"
-            color="info"
+        <div class="col span-6">
+          <LabeledSelect
+            v-model:value="selectedDevices"
+            label="Available PCI Devices"
+            searchable
+            multiple
+            taggable
+            :options="deviceOpts"
+            :mode="mode"
           >
-            <t k="harvester.pci.deviceInTheSameHost" />
-          </Banner>
+            <template #option="option">
+              <span>{{ option.value }} <span class="text-label">({{ option.displayLabel }})</span></span>
+            </template>
+          </LabeledSelect>
         </div>
       </div>
-      <template v-if="enabledDevices.length">
-        <div class="row">
-          <div class="col span-6">
-            <LabeledSelect
-              v-model:value="selectedDevices"
-              label="Available PCI Devices"
-              searchable
-              multiple
-              taggable
-              :options="deviceOpts"
-              :mode="mode"
-            >
-              <template #option="option">
-                <span>{{ option.value }} <span class="text-label">({{ option.displayLabel }})</span></span>
-              </template>
-            </LabeledSelect>
-          </div>
+      <div
+        v-if="compatibleNodes.length && selectedDevices.length"
+        class="row"
+      >
+        <div class="col span-12 text-muted">
+          Compatible hosts:
+          <!-- eslint-disable-next-line vue/no-parsing-error -->
+          <span
+            v-for="(node, idx) in compatibleNodes"
+            :key="idx"
+          >{{ node }}{{ idx < compatibleNodes.length-1 ? ', ' : '' }}</span>
         </div>
-        <div
-          v-if="compatibleNodes.length && selectedDevices.length"
-          class="row"
-        >
-          <div class="col span-12 text-muted">
-            Compatible hosts:
-            <!-- eslint-disable-next-line vue/no-parsing-error -->
-            <span
-              v-for="(node, idx) in compatibleNodes"
-              :key="idx"
-            >{{ node }}{{ idx < compatibleNodes.length-1 ? ', ' : '' }}</span>
-          </div>
-        </div>
-        <div
-          v-else-if="selectedDevices.length"
-          class="text-error"
-        >
-          {{ t('harvester.pci.impossibleSelection') }}
-        </div>
-        <button
-          type="button"
-          class="btn btn-sm role-link pl-0"
-          @click="e=>{showMatrix = !showMatrix; e.target.blur()}"
-        >
-          {{ showMatrix ? t('harvester.pci.hideCompatibility') : t('harvester.pci.showCompatibility') }}
-        </button>
-        <div
-          v-if="showMatrix"
-          class="row mt-20"
-        >
-          <div class="col span-12">
-            <CompatibilityMatrix
-              :enabled-devices="enabledDevices"
-              :devices-by-node="devicesByNode"
-              :devices-in-use="devicesInUse"
-            />
-          </div>
-        </div>
-      </template>
-      <div class="row mt-20">
+      </div>
+      <div
+        v-else-if="selectedDevices.length"
+        class="text-error"
+      >
+        {{ t('harvester.pci.impossibleSelection') }}
+      </div>
+      <button
+        type="button"
+        class="btn btn-sm role-link pl-0"
+        @click="e=>{showMatrix = !showMatrix; e.target.blur()}"
+      >
+        {{ showMatrix ? t('harvester.pci.hideCompatibility') : t('harvester.pci.showCompatibility') }}
+      </button>
+      <div
+        v-if="showMatrix"
+        class="row mt-20"
+      >
         <div class="col span-12">
-          <DeviceList
-            :schema="pciDeviceSchema"
-            :devices="pciDevices"
-            @submit.prevent
+          <CompatibilityMatrix
+            :enabled-devices="enabledDevices"
+            :devices-by-node="devicesByNode"
+            :devices-in-use="devicesInUse"
           />
         </div>
+      </div>
+    </template>
+    <div class="row mt-20">
+      <div class="col span-12">
+        <DeviceList
+          :schema="pciDeviceSchema"
+          :devices="pciDevices"
+          @submit.prevent
+        />
       </div>
     </div>
   </div>

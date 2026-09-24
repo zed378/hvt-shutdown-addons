@@ -2,7 +2,7 @@
 import { isEqual } from 'lodash';
 import { mapGetters } from 'vuex';
 import Tabbed from '@shell/components/Tabbed';
-import { clone } from '@shell/utils/object';
+import { clone, set } from '@shell/utils/object';
 import Tab from '@shell/components/Tabbed/Tab';
 import { Checkbox } from '@components/Form/Checkbox';
 import CruResource from '@shell/components/CruResource';
@@ -21,9 +21,7 @@ import { saferDump } from '@shell/utils/create-yaml';
 import { exceptionToErrorsArray } from '@shell/utils/error';
 import { HCI as HCI_ANNOTATIONS } from '@pkg/harvester/config/labels-annotations';
 import { BEFORE_SAVE_HOOKS, AFTER_SAVE_HOOKS } from '@shell/mixins/child-hook';
-
 import CreateEditView from '@shell/mixins/create-edit-view';
-
 import { parseVolumeClaimTemplates } from '@pkg/utils/vm';
 import VM_MIXIN from '../../mixins/harvester-vm';
 import { HCI } from '../../types';
@@ -31,11 +29,14 @@ import RestartVMDialog from '../../dialog/RestartVMDialog';
 import PciDevices from './VirtualMachinePciDevices/index';
 import AccessCredentials from './VirtualMachineAccessCredentials';
 import CloudConfig from './VirtualMachineCloudConfig';
+import WindowsSysprep from './VirtualMachineWindowsSysprep';
 import CpuMemory from './VirtualMachineCpuMemory';
+import CpuModel from './VirtualMachineCpuModel';
 import Network from './VirtualMachineNetwork';
 import Volume from './VirtualMachineVolume';
 import SSHKey from './VirtualMachineSSHKey';
 import Reserved from './VirtualMachineReserved';
+import Filesystem from './VirtualMachineFilesystem';
 import { Banner } from '@components/Banner';
 import MessageLink from '@shell/components/MessageLink';
 
@@ -57,7 +58,9 @@ export default {
     SSHKey,
     Network,
     CpuMemory,
+    CpuModel,
     CloudConfig,
+    WindowsSysprep,
     NodeScheduling,
     PodAffinity,
     AccessCredentials,
@@ -70,6 +73,7 @@ export default {
     Banner,
     MessageLink,
     UsbDevices,
+    Filesystem,
   },
 
   mixins: [CreateEditView, VM_MIXIN],
@@ -89,21 +93,38 @@ export default {
 
     const hostname = this.value.spec.template.spec.hostname || '';
 
+    // Display name can contain arbitrary strings. There is no XSS risk because the value is
+    // rendered via Vue's {{ }} interpolation which auto-escapes HTML; v-html is never used for
+    // this field. See harvester/harvester#10423 for details.
+    const customizeDisplayName = !!(this.value.metadata?.annotations?.[HCI_ANNOTATIONS.VM_DISPLAY_NAME]);
+
     return {
       cloneVM,
-      count:             2,
-      templateId:        '',
-      templateVersionId: '',
-      namePrefix:        '',
-      isSingle:          true,
-      isOpen:            false,
+      count:                2,
+      templateId:           '',
+      templateVersionId:    '',
+      namePrefix:           '',
+      isSingle:             true,
+      isOpen:               false,
       hostname,
       isRestartImmediately,
+      customizeDisplayName,
     };
   },
 
   computed: {
     ...mapGetters({ t: 'i18n/t' }),
+
+    // VM display name is stored as an annotation; bind a dedicated input to it
+    // so we don't have to mutate metadata.name (which would break the k8s PUT).
+    displayName: {
+      get() {
+        return this.value.metadata?.annotations?.[HCI_ANNOTATIONS.VM_DISPLAY_NAME] || '';
+      },
+      set(val) {
+        this.value.setAnnotation(HCI_ANNOTATIONS.VM_DISPLAY_NAME, val);
+      },
+    },
 
     to() {
       return {
@@ -209,8 +230,15 @@ export default {
 
       return false;
     },
+
+    vGPUAsPCIDeviceEnabled() {
+      return this.$store.getters['harvester-common/getFeatureEnabled']('vGPUAsPCIDevice');
+    },
     usbPassthroughEnabled() {
       return this.$store.getters['harvester-common/getFeatureEnabled']('usbPassthrough');
+    },
+    filesystemEnabled() {
+      return this.$store.getters['harvester-common/getFeatureEnabled']('supportFilesystem');
     },
   },
 
@@ -283,6 +311,12 @@ export default {
         this.getInitConfig({ value: this.value, init: this.isCreate });
       }
     },
+
+    customizeDisplayName(neu) {
+      if (!neu) {
+        this.value.setAnnotation(HCI_ANNOTATIONS.VM_DISPLAY_NAME, '');
+      }
+    },
   },
 
   created() {
@@ -295,6 +329,10 @@ export default {
       try {
         await this.saveSecret(res);
         await this.saveAccessCredentials(res);
+
+        if (this.isWindows) {
+          await this.saveSysprepConfig(res);
+        }
       } catch (e) {
         this.errors.push(...exceptionToErrorsArray(e));
       }
@@ -315,6 +353,7 @@ export default {
     const diskRows = this.getDiskRows(this.value);
 
     this['diskRows'] = diskRows;
+    this['filesystemRows'] = this.getFilesystemRows(this.value);
     const templateId = this.$route.query.templateId;
     const templateVersionId = this.$route.query.versionId;
 
@@ -339,6 +378,7 @@ export default {
       clear(this.errors);
 
       this.validateCPUMemory();
+      this.validateWindowsSysprep();
 
       // block create VM flow if has validation errors
       if (this.errors.length) {
@@ -363,6 +403,24 @@ export default {
 
       if ((!memory)) {
         this.errors.push(this.t('validation.required', { key: this.t('harvester.virtualMachine.input.memory') }, true));
+      }
+    },
+
+    validateWindowsSysprep() {
+      if (!this.isWindows) {
+        return;
+      }
+
+      if (this.sysprep?.secretName?.trim?.() && !this.sysprep?.xmlContent?.trim?.()) {
+        this.errors.push(this.t('validation.required', { key: this.t('harvester.virtualMachine.sysprep.xmlContent') }, true));
+
+        return;
+      }
+
+      const sysprepValidationError = this.$refs.sysprepConfig?.xmlContentValidationError;
+
+      if (sysprepValidationError) {
+        this.errors.push(sysprepValidationError);
       }
     },
 
@@ -429,6 +487,20 @@ export default {
         await value.save();
         await this.applyHooks(AFTER_SAVE_HOOKS);
       } catch (e) {
+        // Reset the generated secret name(s) so a retried create (e.g. after correcting an
+        // invalid/duplicate VM name) always regenerates them from the current name instead of
+        // reusing names derived from this failed attempt. Only do this for create: in edit mode
+        // secretName/sysprep.secretName may reference an existing secret loaded from the VM,
+        // which must not be discarded. See harvester/harvester#11174.
+        if (this.isCreate) {
+          this.secretName = '';
+          this.secretNamePrefixUsed = '';
+          if (this.sysprepSecretNamePrefixUsed !== '') {
+            this.sysprep.secretName = '';
+            this.sysprepSecretNamePrefixUsed = '';
+          }
+        }
+
         this.errors.push(...exceptionToErrorsArray(e));
         buttonCb(false);
       }
@@ -516,6 +588,7 @@ export default {
     onTabChanged({ tab }) {
       if (tab.name === 'advanced') {
         this.$refs.yamlEditor?.refresh();
+        this.$refs.sysprepConfig?.refresh();
       }
     },
 
@@ -537,6 +610,18 @@ export default {
       const out = saferDump(this.value);
 
       return out;
+    },
+
+    updateCpuModel(value) {
+      if (!this.spec?.template?.spec?.domain?.cpu) {
+        set(this.spec, 'template.spec.domain.cpu', {});
+      }
+
+      if (value && value !== '') {
+        set(this.spec.template.spec.domain.cpu, 'model', value);
+      } else {
+        delete this.spec.template.spec.domain.cpu.model;
+      }
     },
   },
 };
@@ -591,6 +676,33 @@ export default {
         />
       </template>
     </NameNsDescription>
+
+    <div v-if="isSingle">
+      <div class="row mb-20">
+        <div class="col span-12">
+          <Checkbox
+            v-model:value="customizeDisplayName"
+            class="check"
+            type="checkbox"
+            :label="t('harvester.virtualMachine.input.customizeDisplayName')"
+            :mode="mode"
+          />
+        </div>
+      </div>
+      <div
+        v-if="customizeDisplayName"
+        class="row mb-20"
+      >
+        <div class="col span-6">
+          <LabeledInput
+            v-model:value="displayName"
+            :mode="mode"
+            :label="t('harvester.virtualMachine.input.displayName')"
+            :placeholder="t('harvester.virtualMachine.input.displayNamePlaceholder')"
+          />
+        </div>
+      </div>
+    </div>
 
     <Checkbox
       v-if="isCreate"
@@ -726,7 +838,7 @@ export default {
       </Tab>
 
       <Tab
-        v-if="enabledSriovgpu"
+        v-if="enabledSriovgpu && !vGPUAsPCIDeviceEnabled"
         :label="t('harvester.tab.vGpuDevices')"
         name="vGpuDevices"
         :weight="-6"
@@ -766,9 +878,22 @@ export default {
       </Tab>
 
       <Tab
+        v-if="filesystemEnabled"
+        name="filesystem"
+        :label="t('harvester.tab.filesystem')"
+        :weight="-9"
+      >
+        <Filesystem
+          v-model:value="filesystemRows"
+          :mode="isCreate ? mode : 'view'"
+          :namespace="value.metadata.namespace"
+        />
+      </Tab>
+
+      <Tab
         name="labels"
         :label="t('generic.labels')"
-        :weight="-9"
+        :weight="-10"
       >
         <Banner color="info">
           <t k="harvester.virtualMachine.labels.banner" />
@@ -787,7 +912,7 @@ export default {
       <Tab
         name="instanceLabel"
         :label="t('harvester.tab.instanceLabel')"
-        :weight="-10"
+        :weight="-11"
       >
         <Banner color="info">
           <t k="harvester.virtualMachine.instanceLabels.banner" />
@@ -808,7 +933,7 @@ export default {
       <Tab
         name="annotations"
         :label="t('harvester.tab.annotations')"
-        :weight="-11"
+        :weight="-12"
       >
         <Banner color="info">
           <t k="harvester.virtualMachine.annotations.banner" />
@@ -829,7 +954,7 @@ export default {
       <Tab
         name="advanced"
         :label="t('harvester.tab.advanced')"
-        :weight="-12"
+        :weight="-13"
       >
         <div class="row mb-20">
           <div class="col span-6">
@@ -866,6 +991,16 @@ export default {
               :reserved-memory="reservedMemory"
               :mode="mode"
               @updateReserved="updateReserved"
+            />
+          </div>
+        </div>
+
+        <div class="row mb-20">
+          <div class="col span-6">
+            <CpuModel
+              v-model:value="cpuModel"
+              :mode="mode"
+              @update:value="updateCpuModel"
             />
           </div>
         </div>
@@ -931,12 +1066,19 @@ export default {
           :user-script="userScript"
           :mode="mode"
           :os-type="osType"
-          :view-code="isWindows"
           :namespace="value.metadata.namespace"
           :network-script="networkScript"
           @updateUserData="updateUserData"
           @updateNetworkData="updateNetworkData"
           @updateDataTemplateId="updateDataTemplateId"
+        />
+
+        <WindowsSysprep
+          v-if="isWindows"
+          ref="sysprepConfig"
+          v-model:value="sysprep"
+          :mode="mode"
+          :namespace="value.metadata.namespace"
         />
 
         <Checkbox

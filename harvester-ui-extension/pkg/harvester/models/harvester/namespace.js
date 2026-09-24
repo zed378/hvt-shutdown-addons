@@ -5,6 +5,7 @@ import SYSTEM_NAMESPACES from '@shell/config/system-namespaces';
 import { get } from '@shell/utils/object';
 import { NAMESPACE } from '@shell/config/types';
 import { PRODUCT_NAME as HARVESTER_PRODUCT } from '@pkg/harvester/config/harvester';
+import { FORKLIFT_NAMESPACE } from '@pkg/harvester/config/harvester-map';
 import { HCI } from '../../types';
 
 const OBSCURE_NAMESPACE_PREFIX = [
@@ -24,7 +25,7 @@ const OBSCURE_NAMESPACE_PREFIX = [
 
 export default class HciNamespace extends namespace {
   get _availableActions() {
-    const out = super._availableActions;
+    let out = super._availableActions;
     const remove = out.findIndex((a) => a.action === 'promptRemove');
 
     const promptRemove = {
@@ -52,6 +53,16 @@ export default class HciNamespace extends namespace {
 
     insertAt(out, out.length - 1, promptRemove);
     insertAt(out, out.length - 5, editQuotaAction);
+
+    const canUpdate = !!this.linkFor('update');
+
+    out = out.map((action) => {
+      if (['move'].includes(action.action)) {
+        return { ...action, enabled: action.enabled && canUpdate };
+      }
+
+      return action;
+    });
 
     return out;
   }
@@ -83,6 +94,10 @@ export default class HciNamespace extends namespace {
   }
 
   get isSystem() {
+    if (this.metadata?.name === FORKLIFT_NAMESPACE) {
+      return false;
+    }
+
     const systemNamespaces = ['fleet-default'];
 
     if (systemNamespaces.includes(this.metadata.name)) {

@@ -1,0 +1,70 @@
+name: Build and release Extension Catalog Image to registry
+
+on:
+  workflow_call:
+    inputs:
+      registry_target:
+        required: true
+        type: string
+      registry_user:
+        required: true
+        type: string
+    outputs:
+      build-extension-catalog-job-status: 
+        value: ${{ jobs.build-extension-catalog.outputs.build-status }}
+
+jobs:
+  build-and-push-extension-catalog:
+    name: Build container image
+    if: github.ref_type == 'tag' || (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      build-status: ${{ job.status }}
+    steps:
+      - name: Read Secrets
+        uses: rancher-eio/read-vault-secrets@d266f55186f80a893839f6e15662e67388e443e6 # v3
+        with:
+          secrets: |
+            secret/data/github/repo/${{ github.repository }}/dockerhub/rancher/credentials username | DOCKER_USERNAME ;
+            secret/data/github/repo/${{ github.repository }}/dockerhub/rancher/credentials password | DOCKER_PASSWORD ;
+      
+      - name: Checkout repository (normal flow)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ env.DOCKER_USERNAME }}
+          password: ${{ env.DOCKER_PASSWORD }}
+
+      - name: Setup Helm
+        uses: azure/setup-helm@5119fcb9089d432beecbf79bb2c7915207344b78 # v3
+        with:
+          version: v3.8.0
+
+      - name: Setup Nodejs with yarn install
+        uses: ./.github/actions/setup
+
+        # The catalog image is tagged with the package.json version. Sprint tags
+        # (vX.Y.Z-dev-YYYYMMDD) only share its prefix, so pin it to the tag here.
+      - name: Pin package version to tag
+        if: ${{ github.ref_type == 'tag' }}
+        run: ./scripts/bump_version.sh "${{ github.ref_name }}"
+
+      - name: Build and push UI image
+        run: |
+          publish="yarn publish-pkgs -cp -r ${{ inputs.registry_target }} -o ${{ inputs.registry_user }}"
+          $publish

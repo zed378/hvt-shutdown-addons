@@ -1,0 +1,146 @@
+name: Build and Release Extension Charts on PR Merge
+
+on:
+  push:
+    branches:
+      - 'release-harvester-v*'
+      - 'main'
+
+jobs:
+  setup-target-branch:
+    runs-on: ubuntu-latest
+    outputs:
+      target_branch: ${{ steps.get-version.outputs.target_branch }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Determine target branch
+        id: get-version
+        run: |
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            TARGET_BRANCH="main-head"
+          elif [[ "${{ github.ref_name }}" =~ ^release-harvester-v([0-9]+\.[0-9]+)$ ]]; then
+            TARGET_BRANCH="v${BASH_REMATCH[1]}-head"
+          else
+            echo "Error: invalid branch format." && exit 1
+          fi
+
+          echo "target_branch=${TARGET_BRANCH}" >> $GITHUB_ENV
+          echo "target_branch=${TARGET_BRANCH}" >> $GITHUB_OUTPUT
+
+      - name: Ensure target branch exists
+        run: |
+          git fetch --all
+          if ! git ls-remote --exit-code --heads origin "${{ env.target_branch }}"; then
+            git checkout gh-pages
+            git checkout -b "${{ env.target_branch }}"
+            git push origin "${{ env.target_branch }}"
+          fi
+
+  extract-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Extract version from package.json
+        id: get_version
+        run: |
+          VERSION=$(jq -r '.version' pkg/harvester/package.json)
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+  build-extension-charts:
+    needs:
+      - setup-target-branch
+      - extract-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node from .nvmrc
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'yarn'
+
+      - name: Setup environment
+        run: |
+          corepack enable
+          yarn install --frozen-lockfile
+
+      - name: Setup Helm
+        uses: azure/setup-helm@5119fcb9089d432beecbf79bb2c7915207344b78 # v3
+        with:
+          version: v3.8.0
+
+      - name: Build Helm charts
+        run: |
+          yarn publish-pkgs -s ${{ github.repository }} -b ${{ needs.setup-target-branch.outputs.target_branch }} -t harvester-${{ needs.extract-version.outputs.version }}
+
+      - name: Upload charts artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: charts
+          path: tmp
+
+  release:
+    needs:
+      - setup-target-branch
+      - extract-version
+      - build-extension-charts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: '${{ github.ref_name }}'
+
+      - name: Get last commit hash
+        id: last_commit
+        run: |
+          LAST_COMMIT=$(git rev-parse HEAD)
+          echo "LAST_COMMIT=${LAST_COMMIT}" >> $GITHUB_ENV
+
+      - name: Checkout target branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: '${{ needs.setup-target-branch.outputs.target_branch }}'
+
+      - name: Remove old artifacts
+        run: |
+          rm -rf extensions/harvester/${{ needs.extract-version.outputs.version }}
+          rm -rf charts/harvester/${{ needs.extract-version.outputs.version }}
+          rm -f assets/harvester/harvester-${{ needs.extract-version.outputs.version }}.tgz
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: charts
+
+      - name: Commit and push artifacts
+        run: |
+          git add ./{assets,charts,extensions,index.yaml}
+          git commit -m "CI Build Artifacts (commit: ${{ env.LAST_COMMIT }}, version: ${{ needs.extract-version.outputs.version }})"
+          git push origin ${{ needs.setup-target-branch.outputs.target_branch }}
+
+      - name: Run Helm chart releaser
+        uses: helm/chart-releaser-action@cae68fefc6b5f367a0275617c9f83181ba54714f # v1.7.0
+        with:
+          charts_dir: ./charts
+        env:
+          CR_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          CR_SKIP_EXISTING: true

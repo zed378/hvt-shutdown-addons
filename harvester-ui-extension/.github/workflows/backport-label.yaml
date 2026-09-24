@@ -1,0 +1,83 @@
+name: "PR Management Add Backport Labels"
+
+on:
+  workflow_run:
+    workflows:
+      - "PR Management Add Labels Collect Data"
+    types: [completed]
+
+jobs:
+  add-require-backport-label:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Download PR data artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pr-backport-label-data
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Load PR data
+        run: |
+          cat pr-backport-label-data.env >> $GITHUB_ENV
+
+      - name: Add require-backport label (main branch PRs)
+        if: env.PR_BASE_REF == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          repo="${{ github.repository }}"
+          pr_number="$PR_NUMBER"
+
+          release_branches=$(gh api "repos/${repo}/branches" --paginate --jq '.[].name' | grep -E '^release-harvester-v[0-9]+\.[0-9]+$' || true)
+
+          if [[ -z "$release_branches" ]]; then
+            echo "No release branches found, skipping."
+            exit 0
+          fi
+
+          latest_branch=$(echo "$release_branches" | sort -Vr | head -n1)
+          version="${latest_branch#release-harvester-v}"
+          release_tag="v${version}.0"
+
+          tags=$(gh api "repos/${repo}/releases" --paginate --jq '.[].tag_name')
+          if echo "$tags" | grep -Fxq "$release_tag"; then
+            echo "Release $release_tag already published, skipping."
+            exit 0
+          fi
+
+          label="require backport/v${version}"
+          pr_labels=$(gh pr view "$pr_number" --repo "$repo" --json labels --jq '.labels[].name' || echo "")
+
+          if echo "$pr_labels" | grep -Fxq "$label"; then
+            echo "Label '$label' already present, skipping."
+            exit 0
+          fi
+
+          echo "Adding label: $label"
+          gh pr edit "$pr_number" --repo "$repo" --add-label "$label"
+
+      - name: Add backport label (release branch PRs opened by Mergify)
+        if: startsWith(env.PR_BASE_REF, 'release-harvester-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          IS_MERGIFY=$(echo "$PR_USER_LOGIN" | grep -iq 'mergify' && echo true || echo false)
+
+          if [[ "$IS_MERGIFY" != "true" ]]; then
+            echo "PR author is not Mergify, skipping."
+            exit 0
+          fi
+
+          version="${PR_BASE_REF#release-harvester-v}"
+          label="backport/v${version}"
+          echo "Adding label: $label"
+          gh pr edit "$PR_NUMBER" --repo "${{ github.repository }}" --add-label "$label"

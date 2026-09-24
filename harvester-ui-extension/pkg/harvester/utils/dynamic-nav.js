@@ -1,95 +1,136 @@
+import { FAVORITE_TYPES } from '@shell/store/prefs';
+
 /**
- * Show/hide a side-nav entry based on whether a specific Harvester Add-on is enabled.
+ * Dynamically toggles SideNav entries based on the enabled status of a specific Addon.
  *
- * Adapted from Harvester's newer registerAddonSideNav, but WITHOUT the
- * schema-accessibility filter — our nav entry is a custom virtual page type
- * (e.g. 'node-shutdown'), not a real CRD, so it has no schema of its own.
- *
- * @param {Object} store        - Vuex store.
- * @param {String} productName  - Product name (e.g. 'harvester').
- * @param {Object} config
- * @param {String} config.addonName    - Add-on metadata.name to watch (e.g. 'node-shutdown').
- * @param {String} config.resourceType - Addon schema id (HCI.ADD_ONS).
- * @param {String} config.navGroup     - Side-nav group id (e.g. 'advanced').
- * @param {Array<String>} config.types - Virtual type ids to show/hide (e.g. ['node-shutdown']).
+ * @param {Object} store - The Vuex store instance.
+ * @param {String} productName - The product name (e.g. 'harvester').
+ * @param {Object} config - Configuration object.
+ * @param {String} config.addonName - The name of the addon to watch.
+ * @param {String} config.resourceType - The schema ID for addons.
+ * @param {String} config.navGroup - The group name in the side nav.
+ * @param {Array<String>} config.types - Array of Resource IDs to show/hide.
+ * @param {Boolean} [config.requireSchema=true] - When true, only types with an
+ *        accessible schema are shown. Set false for schema-less virtual types.
  */
-export function registerAddonNav(store, productName, {
-  addonName, resourceType, navGroup, types
+export function registerAddonSideNav(store, productName, {
+  addonName, resourceType, navGroup, types, requireSchema = true
 }) {
   if (typeof window === 'undefined') {
     return;
   }
 
-  // Nudge the SideNav to re-render (it doesn't always react to basicType changes).
+  // Forces the SideNav component to re-render by toggling a dummy user preference.
+  // Necessary because the menu component does not automatically detect
+  // changes to the allowed types list.
   const kickSideNav = () => {
     const TRIGGER = 'ui.refresh.trigger';
 
+    // Toggle the trigger a few times so an early kick (fired before the SideNav
+    // has mounted on first login) is retried once the component is listening.
+    // Use the prefs/load mutation (in-memory only)
+    [0, 600, 1500].forEach((delay) => {
+      setTimeout(() => {
+        const base = (store.getters['prefs/get'](FAVORITE_TYPES) || []).filter((t) => t !== TRIGGER);
+
+        store.commit('prefs/load', { key: FAVORITE_TYPES, value: [...base, TRIGGER] });
+        setTimeout(() => store.commit('prefs/load', { key: FAVORITE_TYPES, value: [...base] }), 300);
+      }, delay);
+    });
+  };
+
+  const hasAccessibleSchema = (t) => {
     try {
-      store.dispatch('type-map/addFavorite', TRIGGER);
-      setTimeout(() => store.dispatch('type-map/removeFavorite', TRIGGER), 600);
+      return !!store.getters[`${ productName }/schemaFor`]?.(t);
     } catch (e) {
-      // best-effort
+      return false;
     }
   };
 
-  const showTypes = () => {
+  const showTypes = (visibleTypes) => {
     store.commit('type-map/basicType', {
       product: productName,
       group:   navGroup,
-      types
+      types:   visibleTypes
     });
   };
 
   const hideTypes = () => {
-    const basicTypes = store.state['type-map']?.basicTypes?.[productName];
+    const basicTypes = store.state['type-map'].basicTypes[productName];
 
     if (basicTypes) {
       types.forEach((t) => delete basicTypes[t]);
     }
   };
 
+  // Adds or removes the resource IDs from the product visibility whitelist.
   const setMenuVisibility = (visible) => {
-    // Always clear first, then re-add when enabled.
+    const accessibleTypes = visible ? (requireSchema ? types.filter(hasAccessibleSchema) : types) : [];
+
+    // Always clear first to remove any previously-registered types that are
+    // no longer accessible (e.g. partial permission changes like types=[A,B] where B is dropped).
     hideTypes();
-    if (visible) {
-      showTypes();
+
+    if (accessibleTypes.length > 0) {
+      showTypes(accessibleTypes);
     }
+
     kickSideNav();
   };
 
+  // Start polling to check if the store is ready.
   let attempts = 0;
   const MAX_ATTEMPTS = 60;
 
   const waitForStore = setInterval(() => {
     attempts++;
+
     try {
-      const schemaFor = store.getters[`${ productName }/schemaFor`];
-      const haveAll = store.getters[`${ productName }/haveAll`];
-      const hasSchema = schemaFor && schemaFor(resourceType);
-      const hasData = haveAll && haveAll(resourceType);
+      // Check if the Schema definitions are loaded.
+      const hasSchema = store.getters[`${ productName }/schemaFor`] &&
+                        store.getters[`${ productName }/schemaFor`](resourceType);
+
+      // Check if the resource list data is fully loaded to prevent race conditions.
+      const hasData = store.getters[`${ productName }/haveAll`] &&
+                      store.getters[`${ productName }/haveAll`](resourceType);
 
       if (hasSchema && hasData) {
+        // Store is ready. Stop polling.
         clearInterval(waitForStore);
 
+        // Watch the addon's enabled status together with the schema availability
+        // of the gated types. Schemas (e.g. forklift CRDs) can load after the
+        // addon is already enabled, so the watcher must also re-run when they
+        // become accessible; otherwise the menu never updates until a refresh.
         store.watch(
           (state, getters) => {
-            const addons = getters[`${ productName }/all`](resourceType) || [];
-            const addon = addons.find((a) => a.metadata?.name === addonName);
+            const addons = getters[`${ productName }/all`](resourceType);
+            const addon = addons.find((a) => a.metadata.name === addonName);
+            const isEnabled = addon?.spec?.enabled === true;
 
-            return addon?.spec?.enabled === true;
+            const schemaReady = requireSchema ? types.every(hasAccessibleSchema) : true;
+
+            return `${ isEnabled }:${ schemaReady }`;
           },
-          (isEnabled) => setMenuVisibility(isEnabled),
+          () => {
+            const addons = store.getters[`${ productName }/all`](resourceType);
+            const addon = addons.find((a) => a.metadata.name === addonName);
+
+            setMenuVisibility(addon?.spec?.enabled === true);
+          },
           { immediate: true, deep: true }
         );
       } else if (hasSchema && !hasData) {
+        // If the schema is ready but the data is missing, request the list from the API.
+        // Ensures the script does not wait indefinitely if the UI has not loaded the addons yet.
         store.dispatch(`${ productName }/findAll`, { type: resourceType });
       } else if (attempts >= MAX_ATTEMPTS) {
+        // Stop checking if the store does not load within the timeout limit.
         clearInterval(waitForStore);
       }
     } catch (e) {
-      if (attempts >= MAX_ATTEMPTS) {
-        clearInterval(waitForStore);
-      }
+      // Ignore errors if the store module is not yet registered and wait for the next attempt.
+      if (attempts >= MAX_ATTEMPTS) clearInterval(waitForStore);
     }
   }, 1000);
 }

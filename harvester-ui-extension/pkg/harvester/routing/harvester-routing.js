@@ -16,11 +16,9 @@ import HarvesterMembers from '../pages/c/_cluster/members/index.vue';
 import ProjectNamespaces from '../pages/c/_cluster/projectsnamespaces.vue';
 import HarvesterAlertmanagerReceiver from '../pages/c/_cluster/alertmanagerconfig/_alertmanagerconfigid/receiver.vue';
 import HarvesterUnsupported from '../pages/c/_cluster/unsupported/index.vue';
-import HarvesterNodeShutdown from '../pages/c/_cluster/node-shutdown/index.vue';
-import HarvesterVpnNetbird from '../pages/c/_cluster/vpn/netbird.vue';
-import HarvesterVpnTailscale from '../pages/c/_cluster/vpn/tailscale.vue';
-import HarvesterVpnZerotier from '../pages/c/_cluster/vpn/zerotier.vue';
-import HarvesterVpnOpenvpn from '../pages/c/_cluster/vpn/openvpn.vue';
+import ForkliftDashboard from '../pages/c/_cluster/vm-migration/index.vue';
+import ForkliftVmMigrationWizard from '../pages/c/_cluster/vm-migration/vm-migration-wizard.vue';
+import ForkliftProviderWizard from '../pages/c/_cluster/vm-migration/provider-wizard.vue';
 
 const routes = [
   {
@@ -81,32 +79,6 @@ const routes = [
     component: HarvesterMembers,
   },
   {
-    name:      `${ PRODUCT_NAME }-c-cluster-node-shutdown`,
-    path:      `/:product/c/:cluster/node-shutdown`,
-    component: HarvesterNodeShutdown,
-  },
-  // VPN add-on — one page per provider, all editing the single `vpn` add-on.
-  {
-    name:      `${ PRODUCT_NAME }-c-cluster-vpn-netbird`,
-    path:      `/:product/c/:cluster/vpn/netbird`,
-    component: HarvesterVpnNetbird,
-  },
-  {
-    name:      `${ PRODUCT_NAME }-c-cluster-vpn-tailscale`,
-    path:      `/:product/c/:cluster/vpn/tailscale`,
-    component: HarvesterVpnTailscale,
-  },
-  {
-    name:      `${ PRODUCT_NAME }-c-cluster-vpn-zerotier`,
-    path:      `/:product/c/:cluster/vpn/zerotier`,
-    component: HarvesterVpnZerotier,
-  },
-  {
-    name:      `${ PRODUCT_NAME }-c-cluster-vpn-openvpn`,
-    path:      `/:product/c/:cluster/vpn/openvpn`,
-    component: HarvesterVpnOpenvpn,
-  },
-  {
     name:      `${ PRODUCT_NAME }-c-cluster`,
     path:      `/:product/c/:cluster`,
     component: Root,
@@ -114,6 +86,18 @@ const routes = [
     name:      `${ PRODUCT_NAME }-c-cluster-projectsnamespaces`,
     path:      `/:product/c/:cluster/projectsnamespaces`,
     component: ProjectNamespaces,
+  }, {
+    name:      `${ PRODUCT_NAME }-c-cluster-vm-migration`,
+    path:      `/:product/c/:cluster/vm-migration`,
+    component: ForkliftDashboard,
+  }, {
+    name:      `${ PRODUCT_NAME }-c-cluster-vm-migration-wizard`,
+    path:      `/:product/c/:cluster/vm-migration/wizard`,
+    component: ForkliftVmMigrationWizard,
+  }, {
+    name:      `${ PRODUCT_NAME }-c-cluster-vm-migration-provider-wizard`,
+    path:      `/:product/c/:cluster/vm-migration/provider-wizard`,
+    component: ForkliftProviderWizard,
   }, {
     name:      `${ PRODUCT_NAME }-c-cluster-resource`,
     path:      `/:product/c/:cluster/:resource`,

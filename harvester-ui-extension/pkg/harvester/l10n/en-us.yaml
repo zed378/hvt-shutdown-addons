@@ -1,3 +1,8 @@
+wizard:
+  create: Create
+  next: Proceed
+  previous: Back
+
 generic:
   tip: Tip
   resourceExternalLinkTips: 'External Link'
@@ -7,6 +12,16 @@ generic:
   inProgress: In Progress
   basic: Basic
   loading: Loading...
+  none: None
+  duration:
+    infinite: Infinite
+    1s: 1 second
+    5s: 5 seconds
+    10s: 10 seconds
+    30s: 30 seconds
+    1m: 1 minute
+    3m: 3 minutes
+    5m: 5 minutes
 
 unsupported:
   serverVersion: 'Current version: <code>{serverVersion}</code>'
@@ -16,11 +31,13 @@ unsupported:
 nav:
   group:
     networks: Networks
-    vpn: VPN
     backupAndSnapshot: Backup and Snapshots
     Monitoring: Monitoring
     Logging: Logging
     'Monitoring and Logging': Monitoring and Logging
+    vmimport: Virtual Machine Imports
+    vmMigration: Virtual Machine Migration
+    Configurations: Configurations
 
 resourceTable:
   groupBy:
@@ -34,6 +51,8 @@ members:
   projectMembership: Project Membership
 
 asyncButton:
+  createAndStart:
+    action: Create and Start
   restart:
     action: Save and Restart
     success: Restarted
@@ -64,18 +83,9 @@ dialog:
     protip: "Tip: Hold the {alternateLabel} key while clicking Delete to bypass the confirmation step."
 
 harvester:
-  nodeShutdown:
-    label: Node Shutdown
-  vpn:
-    netbird:
-      label: NetBird
-    tailscale:
-      label: Tailscale
-    zerotier:
-      label: ZeroTier
-    openvpn:
-      label: OpenVPN
   branding:
+    primeLabel: '{vendor}'
+    primeEmptyLabel: ''
     logos:
       tip: 'Upload a logo to replace the Harvester logo in the top-level navigation header. Image height should be 21 pixels with a max width of 200 pixels. Max file size is 20KB. Accepted formats: JPEG, PNG, SVG.'
     favicon:
@@ -85,6 +95,8 @@ harvester:
     backup:
       success: 'Backup { backUpName } has been initiated.'
       addBackup: Add Backup
+      fileSystemFreezeDeadline:
+        label: 'File System Freeze Deadline'
     quota:
       editVMQuota: Edit VM Quota
       editQuota: Edit Quota
@@ -134,9 +146,31 @@ harvester:
       namespace: Namespace
       message:
         success: 'Image { name } created successfully.'
+    storageMigration:
+      title: Storage Migration
+      fields:
+        sourceVolume:
+          label: Source Volume
+          placeholder: Select a source volume
+        targetVolume:
+          label: Target Volume
+          placeholder: Select a target volume
+    dataMigration:
+      title: Data Migration
+      fields:
+        targetVolumeName:
+          label: Target Volume Name
+          placeholder: Enter a target volume name
+        targetStorageClassName:
+          label: Target Storage Class
+          placeholder: Select a storage class
     migration:
       failedMessage: Latest migration failed!
       title: Migration
+      vmMigrationTitle: '{count, plural, one {Migrating # VM} other {Migrating # VMs}}'
+      selectedVMs: "The following virtual machine(s) will be migrated to the target node"
+      unknownNode: (unknown node)
+      alreadyOnTarget: Already on Target
       fields:
         nodeName:
           label: Target Node
@@ -175,6 +209,11 @@ harvester:
       vmNetwork: Virtual Machine Network
       macAddress: MAC Address
       macAddressTooltip: If left blank, the MAC address will be automatically generated.
+    insertCdRomVolume:
+      success: '{ imageName } is inserted into device { deviceName }.'
+      title: Insert Image
+      image: Image
+      actionLabel: Insert Image
     cpuMemoryHotplug:
       success: 'CPU and Memory are updated to the virtual machine { vm }.'
       title: Edit CPU and Memory
@@ -197,6 +236,8 @@ harvester:
       title: Take Virtual Machine Snapshot
       name: Name
       success: 'Take virtual machine Snapshot { name } successfully.'
+      fileSystemFreezeDeadline:
+        label: 'File System Freeze Deadline'
     restart:
       title: Restart Virtual Machine
       tip: Restart the virtual machine for configuration changes to take effect.
@@ -207,6 +248,9 @@ harvester:
       info: Info
       warning: Warning
       error: Error
+    restartRequired:
+      title: '{count} {count, plural, =1 {Virtual Machine is} other {Virtual Machines are}} Pending Restart'
+      message: 'Please restart { vmNames } to apply updated configurations'
   action:
     createVM: Create Virtual Machine
     start: Start
@@ -233,8 +277,12 @@ harvester:
     suspendSchedule: Suspend
     restoreExistingVM: Replace Existing
     migrate: Migrate
+    vmMigrate: Virtual Machine Migration
     cpuAndMemoryHotplug: Edit CPU and Memory
     abortMigration: Abort Migration
+    storageMigration: Storage Migration
+    cancelStorageMigration: Cancel Storage Migration
+    dataMigration: Data Migration
     createTemplate: Generate Template
     enableMaintenance: Enable Maintenance Mode
     disableMaintenance: Disable Maintenance Mode
@@ -272,6 +320,12 @@ harvester:
     harvesterIpAddress:
       customIpTooltip: "Custom IP (set via annotation)"
   tableHeaders:
+    hostNetworkConfig:
+      underlay: Underlay
+      underlayTooltip: Allow this interface to act as the underlay for VM overlay networks.
+      vlanID: VLAN ID
+      mode: Mode
+      clusterNetwork: Cluster Network
     imageEncryption: Encryption
     size: Size
     virtualSize: Virtual Size
@@ -279,7 +333,9 @@ harvester:
     message: Message
     phase: Phase
     attachedVM: Attached Virtual Machine
-    cpuManager: CPU Manager
+    cpuManager: CPU<br>Manager
+    diskState: Disk
+    routeConnectivityTooltip: Connectivity between the VM network and the management network, which the Harvester nodes are connected to.
     fingerprint: Fingerprint
     value: Value
     actions: Actions
@@ -307,6 +363,27 @@ harvester:
     totalSnapshotQuota: Total Snapshot Quota
     storageClass: Storage Class
     restore: Restore
+    vmImportSourceVm: Source VM
+    vmImportSourceCluster: Source Cluster
+    vmImportStatus: Import Status
+    vmImportSourceVDatacenter: Datacenter
+    vmImportSourceVEndpoint: Endpoint
+    vmImportSourceVClusterStatus: Cluster Status
+    vmImportSourceORegion: Region
+    vmImportSourceOEndpoint: Endpoint
+    vmImportSourceOClusterStatus: Cluster Status
+    vmImportSourceOVAUrl: URL
+    vmImportSourceOVAStatus: Status
+    v4ip: V4 IP
+    v6ip: V6 IP
+    eipName: EIP Name
+    vmMigrationProviderType: Type
+    vmMigrationProviderUrl: URL
+    vmMigrationMapSourceProvider: Source Provider
+    vmMigrationMapDestProvider: Destination Provider
+    vmMigrationPlanTargetNs: Target Namespace
+    vmMigrationPlanVmCount: VM Count
+    vmMigrationMigrationPlan: Plan
   tab:
     volume: Volumes
     network: Networks
@@ -320,6 +397,7 @@ harvester:
     snapshots: Snapshots
     instanceLabel: Instance Labels
     annotations: Annotations
+    filesystem: Filesystem Volume
   fields:
     version: Version
     name: Name
@@ -330,6 +408,7 @@ harvester:
     network: Network
     model: Model
     macAddress: MAC address
+    staticIp: Static IP
     port: Port
     protocol: Protocol
     remove: Remove
@@ -347,28 +426,23 @@ harvester:
     available: Available Devices
     compatibleNodes: Compatible Nodes
     impossibleSelection: 'There are no hosts with all of the selected devices.'
-    howToUseDevice: 'Use the table below to enable PCI passthrough on each device you want to use in this virtual machine.'
+    howToUseDeviceInVMCreation: 
+      prefix: 'Use the table below to enable PCI passthrough on each device you want to use in this virtual machine. <br>For vGPU devices, please enable them on the'
+      middle: vGPU Devices
+      suffix: page first.
+    howToUseDevice: 
+      prefix: 'Select the device in the table to enable PCI passthrough. <br>For vGPU devices, please enable them on the'
+      middle: vGPU Devices
+      suffix: page.
     deviceInTheSameHost: 'You can only select devices on the same host.'
-    oldFormatDevices:
-      help: |-
-        <p>
-          The following PCI devices are using the old naming convention and need to be updated in the YAML file:
-        </p>
-        <ul>
-          {oldFormatDevicesHTML}
-        </ul>
-        <p>
-          Please use the following instructions to update the virtual machine:
-        </p>
-        <ol>
-          <li>Stop the virtual machine, edit the virtual machine YAML, and remove the <Code>hostDevices</Code> section, and save virtual machine the changes to the YAML file.</li>
-          <li>Edit the virtual machine, and add the already enabled PCI Device from the list of available PCIDevices, and save and start VM.</li>
-        </ol>
     showCompatibility: Show device compatibility matrix
     hideCompatibility: Hide device compatibility matrix
     claimError: Error enabling passthrough on {name}
     unclaimError: Error disabling passthrough on {name}
     cantUnclaim: You cannot disable passthrough on a device claimed by another user.
+    detachWarning:
+      title: Cannot Disable Passthrough
+      message: Please detach the device from the VM and save it first before disabling passthrough.
     enableGroup: Enable Group
     disableGroup: Disable Group
     labelRequired: "This rule should not be manually altered: it ensures that the PCI devices selected for this virtual machine are available on the virtual machine's host."
@@ -378,6 +452,8 @@ harvester:
       suffix: to enable the add-on to successfully manage your PCI devices.
     noPCIPermission: Please contact your system administrator to enable the PCI devices first.
     enablePassthroughWarning: Please be careful not to use host-owned PCI devices (e.g., management and VLAN NICs). Incorrect device allocation may cause damage to your cluster, including node failure.
+    disableResourcePooling: Disable Resource Pooling
+    disableResourcePoolingDescription: Assigns this device a unique resource name so it can be pinned to a specific VM, instead of sharing the pool with other identical devices.
 
   devices:
     matrixHostName: Host Name
@@ -414,7 +490,6 @@ harvester:
       volume:
         upperType: Volume name
         lowerType: volume name
-        needImageOrExisting: 'At least an image volume or an existing root-disk volume is required!'
     image:
       ruleTip: 'The URL you have entered ends in an extension that we do not support. We only accept image files that end in .img, .iso, .qcow, .qcow2, .raw.'
       ruleFileTip: 'The file you have chosen ends in an extension that we do not support. We only accept image files that end in .img, .iso, .qcow, .qcow2, .raw.'
@@ -568,6 +643,7 @@ harvester:
       notification:
         success: 'Update host "{name}" storage configurations successfully.'
       error: Host has unready or unschedulable disks.
+      mounted: Already Mounted
       fileSystem:
         info: Current file system is {system}, You can format it manually.
         formatting: Disk is formatting, please wait.
@@ -610,6 +686,10 @@ harvester:
   virtualMachine:
     label: Virtual Machines
     osType: OS Type
+    cpuModel:
+      label: CPU Model
+      fetchError: 'Failed to load CPU model configuration: {error}'
+      optionLabel: "{modelName} ({count} {count, plural, one {node} other {nodes}})"
     hotplug:
       title: Enable CPU and memory hotplug
       tooltip: The default maximum CPU and maximum memory are {hotPlugTimes} times based on CPU and memory.
@@ -620,6 +700,10 @@ harvester:
         title: 'Are you sure that you want to detach volume {name}?'
         actionLabel: Detach Volume
         success: 'Volume { name } is detached successfully.'
+      ejectCdRomVolume:
+        title: 'Are you sure that you want to eject image from device {name}?'
+        actionLabel: Eject Image
+        success: 'Image from device { name } is ejected successfully.'
       detachNIC:
         title: 'Are you sure that you want to detach network interface {name}?'
         actionLabel: Detach Network Interface
@@ -679,6 +763,7 @@ harvester:
         other {Start}
       } Now
     createSSHKey: Create a New...
+    genericLoginError: Authentication failed. Please re-log in and try again.
     installAgent: Install guest agent
     enableUsb: Enable USB Tablet
     advancedOptions:
@@ -698,6 +783,7 @@ harvester:
       dragTip: Drag and drop volumes, or use the volume's arrows, to change the boot order.
       volumeTip: The virtual machine only contains a CD-ROM volume. You may want to add additional disk volumes.
       macTip: "MAC address as seen inside the guest system."
+      staticIpTip: "Static IP that will be stored to annotation static-ip.harvesterhci.io/{nic_name}."
       volumeUpdate: 'Set volume { name } successfully'
       type: Type
       size: Size
@@ -714,6 +800,10 @@ harvester:
       setFirst: Set as root volume
       saveVolume: Update Volume
       encryption: Encryption
+      shareable:
+        label: Shareable
+        tip: Allow multiple virtual machines to attach and write to this volume simultaneously.
+        warning: Multiple virtual machines can write to this volume at the same time. The guest workloads must coordinate access to the shared block device, otherwise concurrent writes will corrupt the data. Workloads that fence through SCSI-3 Persistent Reservations (e.g. Windows Server Failover Clustering) also require persistent reservation support from the storage backend. Host cache and hypervisor disk locking are disabled, and backup or snapshot operations are rejected while the volume is shareable.
       vmImageVolumeTip: Disk size ({diskSize}) should greater than selected image virtual size ({imageVirtualSize})
       lockTooltip:
         all: All volumes are encrypted.
@@ -726,13 +816,14 @@ harvester:
       unmount:
         title: Are you sure?
         message: Are you sure you want to unmount this volume?
+      emptyImage: No media
     network:
       title: Network
       addNetwork: Add Network
       addPort:  Add Port
     cloudConfig:
       title: Cloud Configuration
-      createTemplateTitle: 'Create {name}.'
+      createTemplateTitle: 'Create {name}'
       createNew: Create new...
       cloudInit:
         label: Cloud Init
@@ -745,6 +836,17 @@ harvester:
         label: Network Data Template
         title: "Network Data:"
         tip: "The network-data configuration allows you to customize the instance's networking interfaces by assigning subnet configuration, virtual device creation (bonds, bridges, VLANs) routes and DNS configuration. <a href='https://cloudinit.readthedocs.io/en/latest/reference/network-config-format-v1.html' target='_blank'>Learn more</a>"
+    sysprep:
+      title: Windows Unattended & Sysprep Configuration
+      description: "Configure Windows automated installation using autounattend.xml. The configuration will be stored in a Kubernetes Secret and mounted as a CD-ROM during installation. <a href='https://docs.microsoft.com/en-us/windows-hardware/manufacture/desktop/automate-windows-setup' target='_blank'>Learn more</a>"
+      createNew: Create new...
+      createNewTitle: Create Windows Unattended & Sysprep Template
+      xmlContent: autounattend.xml content
+      secret:
+        label: Windows Unattended & Sysprep Template
+      validation:
+        invalidXml: Invalid XML syntax
+        invalidNamespace: Invalid unattend.xml namespace. Expected 'urn:schemas-microsoft-com:unattend'
     scheduling:
       affinity:
         anyNode: 'Run virtual machine on any available node'
@@ -775,6 +877,18 @@ harvester:
       username: Username
       password: Password
       reservedMemory: Reserved Memory
+      customizeDisplayName: Customize virtual machine display name
+      displayNamePlaceholder: Virtual machine alias name
+      displayName: Display Name
+    filesystem:
+      description: Harvester supports filesystem volumes for VM via virtiofs.
+      type: Filesystem Type
+      volume: Volume
+      resource: Resource
+      add: Add
+      mountBannerHint: "Please update the mount path (e.g. /mnt/appconfigfs) to your preferred location, then add the corresponding commands to the"
+      mountBannerHintLink: "runcmd"
+      mountBannerHintSuffix: "in Advanced tab User Data."
     machineTypeTip: 'Specify a processor architecture to emulate. To see a list of supported architectures, run: qemu-system-x86_64 -cpu ?'
     detail:
       tabs:
@@ -878,6 +992,11 @@ harvester:
       conditions: Conditions
     size: Size
     volumeMode: Volume Mode
+    accessModes: Access Modes
+    createWithDataVolume: Create with DataVolume
+    createWithDataVolumeTooltip: Create Volume with Kubevirt/Containerized Data Importer way. It can fill accessMode/volumeMode automatically.
+    showAdvanced: Show Advanced Options
+    hideAdvanced: Hide Advanced Options
     source: Source
     kind: Kind
     sourceOptions:
@@ -986,6 +1105,8 @@ harvester:
       downloadLog: Download Log
       logStatus: Log Download Status
     dismissMessage: Dismiss it
+    upgradeAvailable: Upgrade Available
+    upgradeUnavailable: Upgrade Unavailable
     upgradeInfo:
       warning: WARNING
       doc: Read the <a href="{url}" target="_blank">documentation</a> before starting the upgrade process. Ensure that you complete procedures that are relevant to your environment and the version you are upgrading to.
@@ -997,7 +1118,9 @@ harvester:
     createTitle: Create Schedule
     createButtonText: Create Schedule
     scheduleType: Virtual Machine Schedule Type
-    cron: Cron Schedule
+    cron:
+      label: Cron Schedule
+      editButton: Edit
     detail:
       namespace: Namespace
       sourceVM: Source Virtual Machine
@@ -1056,6 +1179,7 @@ harvester:
       replaceExisting: Replace existing
       virtualMachineName: Virtual Machine Name
       keepMacAddress: Keep MAC Address
+      haltAfterRestore: Keep powered off after restore
     matchTarget: The current backup target does not match the existing one.
     progress:
       details: Volume details
@@ -1086,6 +1210,9 @@ harvester:
     gateway:
       label: Gateway IP
       placeholder: e.g. 172.20.0.1
+    vlan:
+      label: VLAN
+      placeholder: Select a VLAN
     dhcp:
       label: Dynamic Host Configuration Protocol (DHCP)
       v4Options: DHCPV4Options
@@ -1093,6 +1220,9 @@ harvester:
       placeholder: key1=value1, key2=value2
       dhcpOptionBanner: DHCP options is a key/value string concatenate with comma. For more detail, please refer to <a href="https://kubeovn.github.io/docs/v1.13.x/en/kubevirt/dhcp/" target="_blank">KubOVN document</a>
       tooltip: Enable DHCP server for this subnet. When enabled, VMs can automatically obtain IP addresses from this subnet.
+    externalConnectivity:
+      label: NAT Outgoing
+      tooltip: Enable NAT for VMs using this subnet to access external networks.
     private:
       label: Private Subnet
       tooltip: Enable network isolation for this Subnet. When enabled, VMs can only communicate within this subnet, even if other subnets exist under the same VPC.
@@ -1124,6 +1254,25 @@ harvester:
       banner: The supported field in ACL match can refer to <a href="https://kubeovn.github.io/docs/v1.14.x/en/guide/subnet/#subnet-acl" target="_blank">KubeOvn Subnet ACL document</a>
 
   vpc:
+    viewTopology: Topology
+    topology:
+      loading: Loading topology...
+      empty: No resources found
+      visibility:
+        vpc: VPC
+        subnets: Subnets
+        overlayNetworks: Overlay Networks
+        vms: VMs
+      labels:
+        cidr: CIDR
+        provider: Provider
+        type: Type
+        clusterNetwork: Cluster Network
+        network: Network
+        subnet: Subnet
+        ip: IP
+        mac: MAC
+        peering: Peering
     noAddonEnabled:
       prefix: The kubeovn-operator add-on is not enabled, click
       middle: here
@@ -1149,14 +1298,97 @@ harvester:
       remoteVpc:
         label: Remote VPC
       infoBanner: The static route destination CIDR must cover all subnets CIDR from remote VPC Peer. Read <a href="{url}" target="_blank">VPC Peering Configuration Examples</a> for more information.
+  natGateway:
+    label: Gateways
+    internalTenantNetwork:
+      label: Internal Tenant Network
+      placeholder: Select a Virtual Machine Network
+    vpc:
+      label: VPC
+      placeholder: Select a VPC
+    subnet:
+      label: Subnet
+      placeholder: Select a subnet
+    lanIp:
+      label: LAN IP
+      placeholder: Enter LAN IP
+    externalSubnets:
+      label: External Subnets
+      addLabel: Add
+      placeholder: Select a subnet
+  externalIP:
+    label: External IPs
+    natGateway:
+      label: VpcNatGateway
+      placeholder: Select a VpcNatGateway
+    externalSubnet:
+      label: External Subnet
+      placeholder: Select an external subnet
+    v4ip:
+      label: V4 IP
+      placeholder: public ip from external subnet
+  snat:
+    label: Source Rules
+    eip:
+      label: EIP
+      placeholder: Select an external IP
+    internalCIDR:
+      label: Internal CIDR
+      placeholder: internal subnet CIDR
+  dnat:
+    label: Destination Rules
+    eip:
+      label: EIP
+      placeholder: Select an external IP
+    externalPort:
+      label: External Port
+      placeholder: port number
+    internalIp:
+      label: Internal IP
+      placeholder: internal IP address
+    internalPort:
+      label: Internal Port
+      placeholder: port number
+    protocol:
+      label: Protocol
+      placeholder: Select protocol (tcp or udp)
+  providerNetwork:
+    label: Provider Networks
+    defaultInterface:
+      label: Default Interface
+      placeholder: Select the interface the same as master interface of external overlay network
+    customInterfaces:
+      label: Custom Interfaces
+      addLabel: Add Custom Interface
+      interface:
+        label: Network Interface
+        placeholder: e.g. eth2
+      nodes:
+        label: Nodes
+        addLabel: Add Node
+        placeholder: Select a node
+    excludedNodes:
+      label: Excluded Nodes
+      addLabel: Add Excluded Node
+      placeholder: Select node to exclude from this provider network
+  vlanNetwork:
+    label: VLANs
+  vlan:
+    id:
+      label: VLAN ID
+      placeholder: "e.g. 1-4094"
+    provider:
+      label: Provider Network
+      placeholder: Select a provider network
   networkPolicy:
-    label: Network Policies
+    label: Policies
     banner: The network policies must be used for VMs attached to overlay networks. Please read the <a href="{url}" target="_blank">harvester document</a> how the network policy works.
   network:
     label: Virtual Machine Networks
     tabs:
       basics: Basics
       layer3Network: Route
+      nic: Network Interface Card
     clusterNetwork:
       label: Cluster Network
       create: Create a new cluster network
@@ -1211,6 +1443,13 @@ harvester:
     rancherCluster:
       kubeConfig: Rancher KubeConfig
       removeUpstreamClusterWhenNamespaceIsDeleted: Remove Upstream Cluster When Namespace Is Deleted
+    clusterPodSecurityStandard:
+      whitelistedNamespaces:
+        label: 'Whitelisted Namespaces'
+      privilegedNamespaces:
+        label: 'Privileged Namespaces'
+      restrictedNamespaces:
+        label: 'Restricted Namespaces'
     storageNetwork:
       range:
         placeholder: e.g. 172.16.0.0/24
@@ -1218,6 +1457,7 @@ harvester:
         invalid: '"Range" is invalid.'
       clusterNetwork: Cluster Network
       vlan: VLAN ID
+      exclusiveVlan: Exclusive VLAN
       exclude:
         label: Exclude IPs
         placeholder: CIDR format, e.g. 172.16.0.10/32
@@ -1225,8 +1465,14 @@ harvester:
         addIp: Add Exclude IP
       warning: 'WARNING: <br/> Any change to storage-network requires shutting down all virtual machines before applying this setting. <br/> Users have to ensure the cluster network is configured and VLAN Configuration will cover all nodes and ensure the network connectivity is working and expected in all nodes.'
       tip: 'Specify an IP range in the IPv4 CIDR format. <code>Number of IPs Required = Number of Nodes * 2 + Number of Disks * 2 + Number of Images to Download/Upload </code>. For more information about storage network settings, see the <a href="{url}" target="_blank">documentation</a>.'
+    rwxNetwork:
+      warning: 'WARNING: <br/> Any change to rwx-network requires longhorn RWX volumes detached before applying this setting.<br/>Users have to ensure the cluster network is configured and VLAN Configuration will cover all nodes and ensure the network connectivity is working and expected in all nodes.'
+      shareStorageNetwork: Share Storage Network
+      dedicatedRwxNetwork: Dedicated RWX Network
+      shareStorageNetworkWarning: The rwx-network is governed by storage-network, and changes here won't take effect until share-storage-network is set to false.
     vmForceDeletionPolicy:
       period: Period
+      vmMigrationTimeout: VM Migration Timeout
     vmMigrationNetwork:
       parseError: "Failed to parse existing configuration."
       fetchError: "Failed to load required network resources: {error}. Please refresh the page or try again later."
@@ -1290,7 +1536,10 @@ harvester:
       deleteImage: Please select an image to delete.
       deleteSuccess: "{name} deleted successfully."
       imagePreloadStrategy: Image Preload Strategy
+      nodeUpgradeOption: Node Upgrade Option
       restoreVM: Restore VM
+      strategy: Strategy
+      pauseNodes: Pause Nodes
       strategyType: Strategy Type
       concurrency: Concurrency
     harvesterMonitoring:
@@ -1308,14 +1557,18 @@ harvester:
     clusterRegistrationUrl:
       url: URL
       insecureSkipTLSVerify: Insecure Skip TLS Verify
-      tip: 
-        prefix: Harvester secures cluster registration via TLS by default. If opt out "Insecure SKip TLS Verify", you must provide custom CA certificates using the
+      tip:
+        prefix: Harvester secures cluster registration via TLS by default. If opt out "Insecure Skip TLS Verify", you must provide custom CA certificates using the
         middle: 'additional-ca'
         suffix: setting.
       message: To completely unset the imported Harvester cluster, please also remove it on the Rancher Dashboard UI via the <code> Virtualization Management </code> page.
     ntpServers:
       isNotIPV4: The address you entered is not IPv4 or host. Please enter a valid IPv4 address or a host address.
       isDuplicate: There are duplicate NTP server configurations.
+    instanceManagerResources:
+      parseError: "Failed to parse configuration: {error}"
+      v1: "V1 Data Engine"
+      v2: "V2 Data Engine"
     kubevirtMigration:
       parseError: "Failed to parse configuration: {error}"
       parallelMigrationsPerCluster: "Parallel Migrations Per Cluster"
@@ -1421,6 +1674,7 @@ harvester:
   vmSnapshot:
     label: Virtual Machine Snapshots
     createText: Restore Snapshot
+    title: Restore Virtual Machine
     snapshot: Snapshot
 
   storage:
@@ -1428,6 +1682,7 @@ harvester:
     useDefault: Use the default storage
     volumeEncryption: Volume Encryption
     secret: Secret
+    volumeExpansionCheckbox: Enable Expansion
     migratable:
       label: Migratable
     numberOfReplicas:
@@ -1520,8 +1775,9 @@ harvester:
         schedulingRules: Select node(s) matching rules
     uplink:
       nics:
-        label: NICs
+        label: NIC
         addLabel: Add NIC
+        overlayWarning: The NIC selected here must match the NIC provided in the provider network.
         placeholder: Select a NIC that is available on all the selected nodes
         validate:
           available: NIC "{nic}" is not available on the selected nodes
@@ -1578,19 +1834,320 @@ harvester:
       'rancher-logging': rancher-logging is an add-on to collect versatile logs, events, and audits from the Harvester cluster and route them to many kinds of servers based on flows.
       'rancher-monitoring': rancher-monitoring is an add-on to collect Harvester cluster and virtual machine metrics, view them on the embedded dashboard, and send alert(s) to remote servers.
       'rancher-vcluster': rancher-vcluster deploys a virtual cluster (vcluster) with Rancher installed.
+      'k3k': k3k is an add-on to deploy the k3k controller.
+      'rancher-k3k': rancher-k3k deploys a k3k virtual cluster with Rancher installed.
       'harvester-seeder': harvester-seeder is an add-on that uses IPMI and Redfish to discover hardware information and perform out-of-band operations.
       'harvester-system/harvester-seeder': harvester-seeder is an add-on that uses IPMI and Redfish to discover hardware information and perform out-of-band operations.
       'harvester-csi-driver-lvm': harvester-csi-driver-lvm is an add-on allowing users to create PVC through the LVM with local devices.
       'descheduler': 'The virtual machine auto balance optimizes workload scheduling by evicting pods that are not optimally placed according to administrator-defined policies.'
+
+    vmMigration:
+      generic:
+        unknown: Unknown
+        identifier: Identifier
+        podNetwork: Pod Network
+        ignored: Ignored
+        usedBy: "Used by:"
+        vlan: "VLAN {id}"
+        vCpu: "{count} vCPU"
+        memoryGb: "{value} GB"
+        memoryTb: "{value} TB"
+        elapsed:
+          hoursAndMinutes: "{hours} {hours, plural, one {hour} other {hours}} and {minutes} {minutes, plural, one {minute} other {minutes}}"
+          hours: "{hours} {hours, plural, one {hour} other {hours}}"
+          minutes: "{minutes} {minutes, plural, one {minute} other {minutes}}"
+      errors:
+        failedLoadPlans: Failed to load migration plans
+        failedLoadVms: Failed to load virtual machines
+        failedRefreshVms: Failed to refresh virtual machines
+        failedLoadProviders: Failed to load providers
+        failedLoadProvider: "Failed to load provider: {error}"
+        failedResolveDetails: Failed to resolve network and datastore details
+        failedDecodeCredentials: Failed to decode provider credentials
+        connectionFailed: Connection failed
+        providerNotReady: Provider not ready
+      labels:
+        dashboard: Migration Overview
+        provider: Providers
+        networkMap: Network Maps
+        storageMap: Storage Maps
+        plan: Migration Plans
+        migration: Migrations
+      providerWizard:
+        title: Create Provider
+        editTitle: Edit Provider
+      wizard:
+        title: VM Migration
+        steps:
+          configureProvider:
+            label: Provider
+            description: Configure Provider
+          selectVms:
+            label: VMs
+            description: Select VMs
+          configureMappings:
+            label: Mappings
+            description: Define Mappings
+          reviewMigration:
+            label: Migration Plan
+            description: Review Migration Plan
+      fields:
+        username: Username
+        password: Password
+      configureProvider:
+        title: Configure Provider
+        description: Connect to your VMware vCenter or ESXi host to discover virtual machines for migration
+        connectionDetails: Connection Details
+        providerSelect: Provider
+        createNew: Create new provider
+        requirementsTitle: Requirements
+        requirementsText: "To migrate virtual machines from VMware, you will need a vCenter Server running version 6.5 or higher with a user account that has at least read permissions, and the source environment must be network-accessible from Harvester Node."
+        name: Name
+        urlLabel: vCenter/ESXi URL
+        urlPlaceholder: "https://vcenter.example.com/sdk"
+        urlHint: Enter the full URL including https://
+        vddkImageLabel: VMware VDDK Image
+        vddkImagePlaceholder: "[your-private-registry]/vddk-image:latest"
+        vddkImageTooltip: Specify the VMware VDDK (Virtual Disk Development Kit) Image to accelerate and optimize VMware virtual machine migration.
+        skipSsl: Skip SSL certificate verification
+        skipSslHint: Not recommended for production environments
+        testConnection:
+          action: Test Connection
+          success: Connection successful
+          error: Connection failed
+          waiting: Testing connection...
+        testSuccess: Connection test passed
+        testFailed: Connection test failed
+        testMissingFields: Please fill in all required fields before testing
+        testTimeout: Connection test timed out — the provider did not report a status in time
+        save: Save Provider and Continue
+        saveExisting: Check Provider and Continue
+      selectVms:
+        title: Select Virtual Machines
+        description: Select the virtual machines you want to migrate from the source provider
+        discovered: "{count} VMs discovered from"
+        lastSynced: "Last synced {time} ago • "
+        refreshNow: Refresh now
+        availableVms: Available Virtual Machines
+        selected: selected
+        clearAll: Clear All
+        saveSelection: Save Selection and Continue
+        selectAllBanner:
+          pageOnly: "Your current selection includes only VMs currently shown on the page."
+          selectAll: "Select all {count} VMs from this provider"
+          allSelected: "Your current selection includes all VMs."
+          clearSelection: "Clear Selection"
+        manualEntry:
+          title: Add Virtual Machines
+          description: No VMs were discovered from the provider inventory. Add VMs manually by entering their IDs and names.
+          vmId: VM ID
+          vmIdPlaceholder: "e.g. vm-60527"
+          add: Add
+          added: VMs added
+        columns:
+          vmName: VM Name
+          vmId: VM ID
+          os: Operating System
+          resources: Resources
+          powerState: Power State
+          network: Network
+          datastore: Datastore
+      dashboard:
+        title: Virtual Machine Migration Overview
+        description: "Migrate virtual machines from VMware vSphere to Harvester using cold migration for data consistency. Create a migration plan to select VMs, map networks and storage, and prepare a migration to Harvester."
+        createPlan: Create Migration
+        tableTitle: Migrations
+        columns:
+          status: Status
+          plan: Migration Plan
+          progress: Progress
+          mappings: Mappings
+          duration: Duration
+        progress:
+          failed: Failed
+          migration: Migration
+          initializingMigration: Initializing migration
+          finishedSuccessfully: Finished Successfully
+          step: "Step {index}"
+          vmCount: "{count, plural, one {# VM} other {# VMs}}"
+          vmId: "id: {id}"
+          checkMigratedVm: Click to check migrated VM details
+      configureMappings:
+        title: Set Mappings
+        description: Map VMware networks and datastores to Harvester and Longhorn target resources
+        save: Save Mappings and Continue
+        noTemplate: Start from scratch
+        removeMap: Remove mapping
+        networkMapping:
+          title: Network Mapping
+          description: Map VMware port groups to Harvester networks
+          placeholder: Choose a Harvester network
+          template: Use existing network mapping as template
+          options:
+            podNetworking: Management Network
+            ignored: Ignored (No NIC will be created)
+        storageMapping:
+          title: Storage Mapping
+          description: Map VMware datastores to Harvester storage classes
+          placeholder: Choose a Harvester Storage Class
+          template: Use existing storage mapping as template
+      storageDefaults:
+        title: 'Storage defaults — {name}'
+        description: 'Set the volume mode and access modes applied to every datastore in this storage map that maps to {name}.'
+        descriptionInherited: 'Applies to every datastore in this storage map that maps to {name}. The provider default for {provider} stays unchanged.'
+        summary: 'Volume mode: {volumeMode} · Access mode: {accessModes}'
+        inherited: 'Inherited from provider {provider}'
+        volumeMode: Volume Mode
+        accessMode: Access Mode
+        edit: Edit
+        cancel: Cancel
+        apply: Apply
+        resetToProviderDefault: Reset to Provider Default
+        applyOverride: Apply Override
+      reviewMigration:
+        title: Review Migration Plan
+        description: Confirm your migration settings before starting the transfer of VMs to the target cluster.
+        planName: Name
+        planNamePlaceholder: "e.g. my-migration-plan"
+        planNameProviderConflict: 'The name “{name}” is already used by an existing provider. Please input a different plan name.'
+        planNamePlanConflict: 'The name “{name}” is already used by an existing migration plan. Please input a different plan name.'
+        migrationDetails: Migration Details
+        migrationDetailsDescription: Name this plan and choose the namespace where migrated VMs will be created.
+        totalVms: Total VMs
+        vcpu: vCPU
+        memory: Memory
+        storage: Storage
+        source: Source
+        provider: Provider
+        targetNamespace: Namespace
+        targetNamespacePlaceholder: "Select target namespace"
+        migrationMode: Migration Mode
+        coldMigration: Cold Migration
+        coldMigrationDescription: All source VMs will be powered off during migration.
+        coldMigrationHint: Plan a maintenance window and notify relevant stakeholders before starting.
+        virtualMachines: Virtual Machines
+        editSelection: Edit selection
+        noVmSelected: "No VMs selected. Return to "
+        noVmSelectedLink: "Step 2 to select virtual machines."
+        columns:
+          vmName: VM Name
+          os: Operating System
+          resources: Resources
+          powerState: Power State
+          networkMapping: Network Mapping
+          storageMapping: Storage Mapping
+          sourceTarget: "Source \u2192 Target"
+        actions:
+          menuLabel: Actions
+          editMappings: Edit Mappings
+          removeFromPlan: Remove from Plan
+        warningTitle: "Cold Migration Warning"
+        warningMessage: "All source VMs will be powered off, and downtime will occur during migration. Plan your maintenance window accordingly and notify relevant stakeholders"
+        startMigration: Start Migration Plan
+      plan:
+        states:
+          error: Error
+          canceled: Canceled
+          inProgress: In Progress
+          active: Succeeded
+        actions:
+          start: Start
+          restart: Restart
+          stop: Stop
+      deleteDialog:
+        warning: Deleting this migration plan will also delete the following related resources
+
     vmImport:
       titles:
         basic: Basic
+        auth: Authentication
         pvc: Volume
+        networking: Network Mapping
+        advanced: Advanced
+      labels:
+        vmimport: Virtual Machine Import
+        vmimportSourceVMWare: Source VMWare
+        vmimportSourceOpenStack: Source OpenStack
+        vmimportSourceOVA: Source OVA
+      fields:
+        sourceProvider: Source Provider Type
+        sourceCluster: Source Cluster
+        vmName: VM Name
+        targetStorageClass: Target Storage Class
+        sourceNetwork: Source Network Name
+        destNetwork: Destination Network
+        interfaceModel: Interface Model
+        folder: Folder
+        diskBus: Default Disk Bus
+        defaultInterface: Default Network Interface
+        skipPreflight: Skip Preflight Checks
+        forcePowerOff: Force Power Off Source VM
+        username: Username
+        password: Password
+        caCert: CA Certificate (PEM)
+        selectSecret: Select Secret
+        createSecret: Create New Credentials
+        useSecret: Use Existing Secret
+        none: None (Public URL)
+      placeholders:
+        selectCluster: Select a cluster...
+        selectProviderFirst: Select a provider type first
+        matchSource: Must match the name in the source cluster
+        folderExample: e.g. /Datacenters/DC1/vm
+        caCert: "-----BEGIN CERTIFICATE----- ..."
+      options:
+        useDefault: Use Default
+      actions:
+        addNetwork: Add Network Mapping
+        remove: Remove
+      errors:
+        rfc1123: 'Invalid format. Name must be lowercase, alphanumeric, and cannot contain spaces (e.g. "my-vm-1"). If your Source VM name does not match this, you must rename it on the Source cluster first.'
+        networkMappingRequired: Every Network Mapping row must have a Source and Destination selected.
+      openstack:
+        fields:
+          endpoint: Identity Service Endpoint
+          region: Region
+          projectName: Project Name
+          domainName: Domain Name
+          retryCount: Upload Image Retry Count
+          retryDelay: Upload Image Retry Delay
+        placeholders:
+          endpoint: "e.g. https://devstack/identity"
+          region: e.g. RegionOne
+          projectName: e.g. admin
+          domainName: e.g. default
+          retryCount: "Default: 30"
+          retryDelay: "Default: 10"
+      vmware:
+        fields:
+          endpoint: vCenter Endpoint
+          datacenter: Datacenter
+        placeholders:
+          endpoint: "e.g. https://vscim/sdk"
+          datacenter: e.g. DC0
+        tooltips:
+          datacenter: The exact name of the Datacenter object in vCenter
+      ova:
+        fields:
+          url: URL
+          httpTimeout: HTTP Timeout
+        placeholders:
+          url: "e.g. https://download.example.com/images/my-vm.ova"
+          httpTimeout: "Default: 600"
+
     rancherVcluster:
       accessRancher: Access the Rancher Dashboard
       hostname: Hostname
       rancherVersion: Rancher Version
       password: Bootstrap Password
+    rancherK3k:
+      accessRancher: Access the Rancher Dashboard
+      hostname: Hostname
+      version: Rancher Version
+      password: Bootstrap Password
+      passwordTooltip: The initial password in Rancher for the first time login.
+      enable:
+        title: Enable K3k
     switchFailed: "{action} {name} failed!"
     nvidiaDriverToolkit:
       titles:
@@ -1602,6 +2159,8 @@ harvester:
         repository: Image Repository
       driver:
         location: Driver Location
+      enable:
+        title: Enable NVIDIA Driver Toolkit
       parsingSpecError:
         The field 'spec.valuesContent' has invalid format.
     usbController:
@@ -1686,6 +2245,32 @@ harvester:
       addLabel: Add CIDR
     range:
       addLabel: Add Range
+  hostNetworkConfig:
+    label: Host Networks
+    mode:
+      label: Mode
+    tabs:
+      mode: Mode
+      nodeSelector: Node Selector
+    nodeSelector:
+      addButton: Add Node Selector
+    underlay:
+      label: Underlay
+      tooltip: Allow this interface to act as the underlay for VM overlay networks.
+      conflict: '`{name}` host network config already has underlay enabled. Only one underlay is allowed in the cluster.'
+      noKubeovn:
+        prefix: The kubeovn-operator add-on is not enabled. Click
+        middle: here
+        suffix: to enable the add-on for overlay networking.
+    vlanID:
+      label: VLAN ID
+    ipRange:
+      label: IP Range ({node})
+      placeholder: e.g. 192.168.1.10/24
+    ips:
+      nodeLabel: Node
+      label: IP
+      placeholder: 'e.g. 192.168.1.10/24'
 
   service:
     healthCheckPort:
@@ -1712,7 +2297,8 @@ harvester:
     numVFs: Number Of Virtual Functions
     vfAddresses: Virtual Functions Addresses
     showMore: Show More
-    parentSriov: Filter By Parent SR-IOV
+    parentSriov: Filter By Parent SR-IOV Netork Device
+    parentSriovGPU: Filter By Parent SR-IOV GPU Device
 
   sriovgpu:
     label: SR-IOV GPU Devices
@@ -1727,9 +2313,17 @@ harvester:
       prefix: The nvidia-driver-toolkit add-on is not enabled, click
       middle: here
       suffix: to enable it to manage your SR-IOV GPU devices.
+    enable:
+      title: Enable SR-IOV GPU Device
+      skipMigConfiguration: Use timesliced mode (skip MIG configuration)
+      note: If unchecked, MIG mode will be attempted by default. If MIG mode is not supported or fails to initialize, it will fall back to timesliced mode. The actual mode depends on whether the GPU supports MIG.
+    timeslicedBadge: timesliced mode
+    timesliced: Timesliced
 
   migconfiguration:
     label: vGPU MIG Configurations
+    status:
+      outOfSync: Out of Sync
     infoBanner: To configure the MIG configuration, please disable it first and re-enable after editing the configuration.
     profileSpec: Profile Specs
     profileStatus: Profile Status
@@ -1751,6 +2345,9 @@ harvester:
   vgpu:
     label: vGPU Devices
     noPermission: Please contact system administrator to add Harvester add-ons first.
+    detachWarning:
+      title: Cannot Disable vGPU
+      message: Please detach the device from the VM and save it first before disabling this vGPU device.
     goSetting:
       prefix: The nvidia-driver-toolkit add-on is not enabled, click
       middle: here
@@ -1785,7 +2382,11 @@ harvester:
     claimError: Error enabling passthrough on {name}
     unclaimError: Error disabling passthrough on {name}
     cantUnclaim: You cannot disable passthrough on a device claimed by another user.
+    detachWarning:
+      title: Cannot Disable Passthrough
+      message: Please detach the device from the VM and save it first before disabling passthrough.
     enablePassthroughWarning: 'Please re-enable the USB device if the device path changes in the following situations:<br/>&nbsp1) Re-plugging the USB device.<br/>&nbsp2) Rebooting the node.<br/><br/>An incorrect device path may cause passthrough to fail.'
+    classType: Class Type
 
   harvesterVlanConfigMigrateDialog:
     targetClusterNetwork:
@@ -1828,7 +2429,15 @@ typeDescription:
   harvester: "Branding allows administrators to globally re-brand the UI by customizing the Harvester product name, logos and color scheme."
 
 advancedSettings:
-  experimental: 'Experimental features allow users to test and evaluate early-access functionality prior to official supported releases'
+  tags:
+    modified:
+      label: Modified
+    experimental:
+      label: Experimental
+      description: 'Experimental: The feature is incomplete but its essential functionality is operational. The feature is not recommended for use in production environments.'
+    preview:
+      label: Technical Preview
+      description: 'Technical Preview: The feature is almost complete and its functionality is not expected to change significantly. Explore the feature extensively before using in production environments.'
   descriptions:
     'harv-vlan': Default Network Interface name of the VLAN network.
     'harv-backup-target': Custom backup target to store virtual machine backups.
@@ -1838,6 +2447,7 @@ advancedSettings:
     'harv-containerd-registry': Containerd Registry Configuration to connect private registries.
     'harv-log-level': Configure Harvester server log level. Defaults to Info.
     'harv-server-version': Harvester server version.
+    'harv-server-flavor': "Indicates the Harvester edition: Prime or Community."
     'harv-upgrade-checker-enabled': Specifies whether to enable Harvester upgrade check or not. Default is True.
     'harv-upgrade-checker-url': Default Harvester upgrade check url. Only used when the <code>upgrade-checker-enabled</code> is equal to True.
     'harv-ui-source': Configure how to load the UI source. The `External` option is used to load the UI from a ui-index URL, while the `Bundled` option loads the UI from the local Harvester server.
@@ -1847,11 +2457,13 @@ advancedSettings:
     'harv-additional-ca': 'Custom CA root certificates for TLS validation.'
     'harv-overcommit-config': 'Resource overcommit configuration.'
     'harv-support-bundle-timeout': 'Support bundle timeout configuration in minutes, use 0 to disable the timeout.'
+    'harv-support-bundle-file-name': 'Support bundle file name configuration.'
     'harv-support-bundle-expiration': 'Support bundle expiration configuration in minutes.'
     'harv-support-bundle-node-collection-timeout': 'Support bundle node collection timeout configuration in minutes.'
     'harv-vm-force-reset-policy': Configuration for the force-reset action when a virtual machine is stuck on a node that is down.
     'harv-ssl-parameters': Custom SSL Parameters for TLS validation.
     'harv-storage-network': 'Longhorn storage-network setting.'
+    'harv-rwx-network': 'Configure RWX network behavior for shared or dedicated storage network usage.'
     'harv-support-bundle-namespaces': Select additional namespaces to include in the support bundle.
     'harv-auto-disk-provision-paths': Specify the disks(using glob pattern) that Harvester will automatically add as virtual machine storage.
     'harv-support-bundle-image': Support bundle image configuration. Find different versions in <a href="https://hub.docker.com/r/rancher/support-bundle-kit/tags" target="_blank">rancher/support-bundle-kit</a>.
@@ -1861,12 +2473,16 @@ advancedSettings:
     'harv-auto-rotate-rke2-certs': The certificate rotation mechanism relies on Rancher. Harvester will automatically update certificates generation to trigger rotation.
     'harv-kubeconfig-default-token-ttl-minutes': 'TTL (in minutes) applied on Harvester administration kubeconfig files. Default is 0, which means to never expire.'
     'harv-longhorn-v2-data-engine-enabled': 'Enable the Longhorn V2 data engine. Default is false. <ul><li>Changing this setting will restart RKE2 on all nodes. This will not affect running VM workloads.</li><li>If you see "not enough hugepages-2Mi capacity" errors when enabling this setting, wait a minute for the error to clear. If the error remains, reboot the affected node.</li></ul>'
+    'harv-longhorn-v2-data-engine-hugepage-enabled': 'Enable hugepages when using the Longhorn V2 data engine. Default is true. Disabling hugepages reduces memory pressure on low-spec nodes and increases deployment flexibility. However, performance may be lower compared to running with hugepages.'
+    'harv-longhorn-v2-data-engine-memory-size': 'Configure the amount of memory allocated to the SPDK target daemon when using the Longhorn V2 data engine. Default is 2048 MiB.'
     'harv-additional-guest-memory-overhead-ratio': 'The ratio for kubevirt to adjust the VM overhead memory. The value could be zero, empty value or floating number between 1.0 and 10.0, default to 1.5.'
     'harv-upgrade-config': 'Configure image preloading and VM restore options for upgrades. See related fields in <a href="{url}" target="_blank" rel="noopener">settings/upgrade-config</a>'
     'harv-vm-migration-network': 'Segregated network for VM migration traffic.'
     'harv-rancher-cluster': 'Configure Rancher cluster integration settings for guest cluster management.'
     'harv-max-hotplug-ratio': 'The ratio for kubevirt to limit the maximum CPU and memory that can be hotplugged to a VM. The value could be an integer between 1 and 20, default to 4.'
     'harv-kubevirt-migration': 'Configure cluster-wide KubeVirt live migration parameters.'
+    'harv-instance-manager-resources': 'Configure resource percentage reservations for Longhorn instance manager V1 and V2. Valid instance manager CPU range between 0 - 40.'
+    'harv-cluster-pod-security-standard': 'Enforce Kubernetes Pod Security Standards (PSS) at the cluster level.'
 
 typeLabel:
   kubevirt.io.virtualmachine: |-
@@ -1929,6 +2545,36 @@ typeLabel:
       one { Virtual Private Cloud }
       other { Virtual Private Clouds }
     }
+  kubeovn.io.vlan: |-
+    {count, plural,
+      one { VLAN Network }
+      other { VLAN Networks }
+    }
+  kubeovn.io.providernetwork: |-
+    {count, plural,
+      one { Provider Network }
+      other { Provider Networks }
+    }
+  kubeovn.io.vpcnatgateway: |-
+    {count, plural,
+      one { NAT Gateway }
+      other { NAT Gateways }
+    }
+  kubeovn.io.iptablessnatrule: |-
+    {count, plural,
+      one { Source Rule }
+      other { Source Rules }
+    }
+  kubeovn.io.iptablesdnatrule: |-
+    {count, plural,
+      one { Destination Rule }
+      other { Destination Rules }
+    }
+  kubeovn.io.iptableseip: |-
+    {count, plural,
+      one { External IP }
+      other { External IPs }
+    }
   networking.k8s.io.networkpolicy: |-
     {count, plural,
       one { Network Policy }
@@ -1989,15 +2635,16 @@ typeLabel:
       one { PCI Device }
       other { PCI Devices }
     }
-  persistentvolumeclaim: |-
-    {count, plural,
-      one { Volume }
-      other { Volumes }
-    }
+
   network.harvesterhci.io.clusternetwork: |-
     {count, plural,
       one { Cluster Network }
       other { Cluster Networks }
+    }
+  network.harvesterhci.io.hostnetworkconfig: |-
+    {count, plural,
+      one { Host Network }
+      other { Host Networks }
     }
   harvesterhci.io.addon: |-
     {count, plural,
@@ -2047,4 +2694,49 @@ typeLabel:
     {count, plural,
       one { IP Pool }
       other { IP Pools }
+    }
+  migration.harvesterhci.io.openstacksource: |-
+    {count, plural,
+      one { OpenStack Source }
+      other { OpenStack Sources }
+    }
+  migration.harvesterhci.io.vmwaresource: |-
+    {count, plural,
+      one { VMware Source }
+      other { VMware Sources }
+    }
+  migration.harvesterhci.io.ovasource: |-
+    {count, plural,
+      one { OVA Source }
+      other { OVA Sources }
+    }
+  migration.harvesterhci.io.virtualmachineimport: |-
+    {count, plural,
+      one { Virtual Machine Import }
+      other { Virtual Machine Imports }
+    }
+  forklift.konveyor.io.provider: |-
+    {count, plural,
+      one { Provider }
+      other { Providers }
+    }
+  forklift.konveyor.io.networkmap: |-
+    {count, plural,
+      one { Network Map }
+      other { Network Maps }
+    }
+  forklift.konveyor.io.storagemap: |-
+    {count, plural,
+      one { Storage Map }
+      other { Storage Maps }
+    }
+  forklift.konveyor.io.plan: |-
+    {count, plural,
+      one { Migration Plan }
+      other { Migration Plans }
+    }
+  forklift.konveyor.io.migration: |-
+    {count, plural,
+      one { Migration }
+      other { Migrations }
     }

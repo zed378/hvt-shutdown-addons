@@ -39,9 +39,6 @@ function isReady() {
 export default class HciVmImage extends HarvesterResource {
   get availableActions() {
     let out = super._availableActions;
-    const toFilter = ['goToEditYaml'];
-
-    out = out.filter( (A) => !toFilter.includes(A.action));
 
     // show `Clone` only when imageSource is `download`
     if (this.imageSource !== 'download') {
@@ -55,6 +52,7 @@ export default class HciVmImage extends HarvesterResource {
       canCreateVM = false;
     }
 
+    const canCreateImage = !!this.$getters?.['schemaFor']?.(HCI.IMAGE)?.collectionMethods?.some((method) => method.toLowerCase() === 'post');
     const customActions = this.isReady ? [
       {
         action:  'createFromImage',
@@ -64,13 +62,13 @@ export default class HciVmImage extends HarvesterResource {
       },
       {
         action:  'encryptImage',
-        enabled: this.volumeEncryptionFeatureEnabled && !this.isEncrypted,
+        enabled: this.volumeEncryptionFeatureEnabled && !this.isEncrypted && canCreateImage,
         icon:    'icon icon-lock',
         label:   this.t('harvester.action.encryptImage'),
       },
       {
         action:  'decryptImage',
-        enabled: this.volumeEncryptionFeatureEnabled && this.isEncrypted,
+        enabled: this.volumeEncryptionFeatureEnabled && this.isEncrypted && canCreateImage,
         icon:    'icon icon-unlock',
         label:   this.t('harvester.action.decryptImage'),
       },
