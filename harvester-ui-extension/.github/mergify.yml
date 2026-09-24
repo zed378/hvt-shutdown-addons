@@ -1,0 +1,14 @@
+pull_request_rules:
+  - name: Ask to resolve conflict
+    conditions:
+      - conflict
+    actions:
+      comment:
+        message: This pull request is now in conflict. Could you fix it @{{author}}? 🙏
+
+commands_restrictions:
+  backport:
+    conditions:
+      - or:
+        - sender-permission>=write
+        - sender=github-actions[bot]

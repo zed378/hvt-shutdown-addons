@@ -68,12 +68,6 @@ export default {
   },
 
   watch: {
-    osType(neu) {
-      if (neu === 'windows') {
-        this.id = '';
-      }
-    },
-
     value(neu) {
       this.yamlScript = neu;
     },
@@ -143,6 +137,7 @@ export default {
       <YamlEditor
         ref="yaml"
         v-model:value="yamlScript"
+        :mode="mode"
         class="yaml-editor"
         :editor-mode="editorMode"
       />

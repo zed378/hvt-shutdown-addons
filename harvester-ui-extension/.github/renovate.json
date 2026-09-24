@@ -1,0 +1,57 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": [
+    "config:recommended",
+    ":semanticCommitTypeAll(deps)",
+    ":semanticCommitScopeDisabled"
+  ],
+  "baseBranches": [
+    "main",
+    "release-harvester-v1.7",
+    "release-harvester-v1.8"
+  ],
+  "automergeMajor": false,
+  "semanticCommits": "enabled",
+  "semanticCommitType": "deps",
+  "prHourlyLimit": 12,
+  "digest": {
+    "enabled": false
+  },
+  "timezone": "Asia/Taipei",
+  "schedule": ["after 10am on sunday"],
+  "postUpdateOptions": ["yarnDedupeFewer"],
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["digest"],
+      "enabled": false
+    },
+    {
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "matchPackagePatterns": ["vue", "vue-router", "vuex"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "matchPackageNames": ["@rancher/shell"],
+      "enabled": false
+    },
+    {
+      "matchUpdateTypes": ["minor"],
+      "groupName": "minor dependencies",
+      "minimumReleaseAge": "7 days",
+      "labels": ["minor-update"],
+      "reviewers": ["a110605", "houhoucoop"]
+    },
+    {
+      "matchUpdateTypes": ["patch"],
+      "automerge": false,
+      "minimumReleaseAge": "7 days",
+      "groupName": "patch dependencies",
+      "labels": ["patch-update"],
+      "reviewers": ["a110605", "houhoucoop"]
+    }
+  ]
+}

@@ -15,6 +15,13 @@ export const VOLUME_MODE = {
   FILE_SYSTEM: 'Filesystem'
 };
 
+export const ACCESS_MODE = {
+  READ_WRITE_MANY:     'ReadWriteMany',
+  READ_WRITE_ONCE:     'ReadWriteOnce',
+  READ_ONLY_MANY:      'ReadOnlyMany',
+  READ_WRITE_ONCE_POD: 'ReadWriteOncePod',
+};
+
 export const NETWORK_PROTOCOL = {
   IPv4: 'IPv4',
   IPv6: 'IPv6',
@@ -28,4 +35,27 @@ export const INTERNAL_STORAGE_CLASS = {
 export const L2VLAN_MODE = {
   ACCESS: 'access',
   TRUNK:  'trunk',
+};
+
+export const VMIMPORT_SOURCE_PROVIDER = {
+  VMWARE:    'vmware',
+  OPENSTACK: 'openstack',
+  OVA:       'ova',
+};
+
+export const VMIMPORT_SOURCE_KINDS = {
+  VMWARE:    'VmwareSource',
+  OPENSTACK: 'OpenstackSource',
+  OVA:       'OvaSource',
+};
+
+export const CDI_POPULATOR_KIND = {
+  VOLUME_IMPORT_SOURCE: 'VolumeImportSource',
+  VOLUME_CLONE_SOURCE:  'VolumeCloneSource',
+};
+
+export const FILESYSTEM_SOURCE_TYPE = {
+  CONFIGMAP:      'configmap',
+  SECRET:         'secret',
+  SERVICEACCOUNT: 'serviceaccount',
 };

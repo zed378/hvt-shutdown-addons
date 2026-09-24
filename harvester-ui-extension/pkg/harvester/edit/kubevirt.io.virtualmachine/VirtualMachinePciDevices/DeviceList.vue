@@ -31,6 +31,7 @@ export default {
     const _hash = {
       pciclaims: this.$store.dispatch(`${ inStore }/findAll`, { type: HCI.PCI_CLAIM }),
       sriovs:    this.$store.dispatch(`${ inStore }/findAll`, { type: HCI.SR_IOV }),
+      srigpuovs:    this.$store.dispatch(`${ inStore }/findAll`, { type: HCI.SR_IOVGPU_DEVICE }),
     };
 
     await allHash(_hash);
@@ -106,19 +107,32 @@ export default {
   },
 
   computed: {
-    parentSriovOptions() {
+    allSriovs() {
       const inStore = this.$store.getters['currentProduct'].inStore;
-      const allSriovs = this.$store.getters[`${ inStore }/all`](HCI.SR_IOV) || [];
 
-      return allSriovs.map((sriov) => {
-        return sriov.id;
-      });
+      return this.$store.getters[`${ inStore }/all`](HCI.SR_IOV) || [];
+    },
+    allSriovGPUs() {
+      const inStore = this.$store.getters['currentProduct'].inStore;
+
+      return this.$store.getters[`${ inStore }/all`](HCI.SR_IOVGPU_DEVICE) || [];
+    },
+    parentSriovOptions() {
+      return this.allSriovs.map((sriov) => sriov.id);
+    },
+    parentSriovGPUOptions() {
+      return this.allSriovGPUs.map((sriovgpu) => sriovgpu.id);
     },
     parentSriovLabel() {
       return HCI_ANNOTATIONS.PARENT_SRIOV;
-    }
+    },
+    parentSriovGPULabel() {
+      return HCI_ANNOTATIONS.PARENT_SRIOV_GPU;
+    },
+    vGPUAsPCIDeviceEnabled() {
+      return this.$store.getters['harvester-common/getFeatureEnabled']('vGPUAsPCIDevice');
+    },
   },
-
   methods: {
     enableGroup(rows = []) {
       const row = rows[0];
@@ -136,6 +150,10 @@ export default {
     },
     groupIsAllEnabled(rows = []) {
       return !rows.find((device) => !device.passthroughClaim);
+    },
+
+    canManageGroup(rows = []) {
+      return rows.length > 0 && rows.every((row) => row.canUpdate === true);
     },
 
     changeRows(filterRows, parentSriov) {
@@ -171,22 +189,27 @@ export default {
         v-trim-whitespace
         class="group-tab"
       >
-        <button
-          v-if="groupIsAllEnabled(group.rows)"
-          type="button"
-          class="btn btn-sm role-secondary mr-5"
-          @click="e=>{disableGroup(group.rows); e.target.blur()}"
+        <div
+          v-if="canManageGroup(group.rows)"
+          class="group-actions"
         >
-          {{ t('harvester.pci.disableGroup') }}
-        </button>
-        <button
-          v-else
-          type="button"
-          class="btn btn-sm role-secondary mr-5"
-          @click="e=>{enableGroup(group.rows); e.target.blur()}"
-        >
-          {{ t('harvester.pci.enableGroup') }}
-        </button>
+          <button
+            v-if="groupIsAllEnabled(group.rows)"
+            type="button"
+            class="btn btn-sm role-secondary mr-5"
+            @click="e=>{disableGroup(group.rows); e.target.blur()}"
+          >
+            {{ t('harvester.pci.disableGroup') }}
+          </button>
+          <button
+            v-else
+            type="button"
+            class="btn btn-sm role-secondary mr-5"
+            @click="e=>{enableGroup(group.rows); e.target.blur()}"
+          >
+            {{ t('harvester.pci.enableGroup') }}
+          </button>
+        </div>
         <span v-clean-html="group.key" />
       </div>
     </template>
@@ -206,6 +229,44 @@ export default {
         :rows="rows"
         @change-rows="changeRows"
       />
+      <FilterBySriov
+        v-if="vGPUAsPCIDeviceEnabled"
+        ref="filterByParentSRIOVGPU"
+        :parent-sriov-options="parentSriovGPUOptions"
+        :parent-sriov-label="parentSriovGPULabel"
+        :label="t('harvester.sriov.parentSriovGPU')"
+        :rows="rows"
+        @change-rows="changeRows"
+      />
     </template>
   </ResourceTable>
 </template>
+
+<style lang="scss" scoped>
+.group-actions  {
+  display: inline;
+}
+
+// Match the enable/disable passthrough bulk-action buttons height to the .btn (40px) on the right.
+:deep(.bulk .rc-button.btn-medium.bulk-action:not(.btn-sm)) {
+  min-height: 40px;
+}
+
+// Make the collapsed "Actions" dropdown button 40px too.
+:deep(.bulk .rc-button.btn-medium.bulk-actions-dropdown:not(.btn-sm)) {
+  min-height: 40px;
+}
+
+// Lay the bulk row out with flex so the "N selected" label can wrap below the buttons.
+:deep(.bulk) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+:deep(.bulk .action-availability) {
+  flex-basis: 100%;
+  margin-left: 0;
+  margin-top: 6px;
+}
+</style>

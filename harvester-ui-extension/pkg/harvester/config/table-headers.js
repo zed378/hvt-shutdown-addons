@@ -131,3 +131,169 @@ export const PROVIDER = {
   value:    'spec.provider',
   align:    'left',
 };
+
+// Source VM column in migration.harvesterhci.io.virtualmachineimport list page
+export const VM_IMPORT_SOURCE_VM = {
+  name:     'sourceVm',
+  labelKey: 'harvester.tableHeaders.vmImportSourceVm',
+  value:    'spec.virtualMachineName',
+  sort:     'spec.virtualMachineName',
+  align:    'left',
+};
+
+// Source Cluster column in migration.harvesterhci.io.virtualmachineimport list page
+export const VM_IMPORT_SOURCE_CLUSTER = {
+  name:     'sourceCluster',
+  labelKey: 'harvester.tableHeaders.vmImportSourceCluster',
+  value:    'spec.sourceCluster.name',
+  sort:     'spec.sourceCluster.name',
+  align:    'left',
+};
+
+// Import Status column in migration.harvesterhci.io.virtualmachineimport list page
+export const VM_IMPORT_STATUS = {
+  name:     'importStatus',
+  labelKey: 'harvester.tableHeaders.vmImportStatus',
+  value:    'status.importStatus',
+  sort:     'status.importStatus',
+  align:    'left',
+};
+
+// Datacenter column in migration.harvesterhci.io.vmwaresource list page
+export const VM_IMPORT_SOURCE_V_DC = {
+  name:     'datacenter',
+  labelKey: 'harvester.tableHeaders.vmImportSourceVDatacenter',
+  value:    'spec.dc',
+  sort:     'spec.dc',
+  align:    'left',
+};
+
+// Endpoint column in migration.harvesterhci.io.vmwaresource list page
+export const VM_IMPORT_SOURCE_V_ENDPOINT = {
+  name:     'endpoint',
+  labelKey: 'harvester.tableHeaders.vmImportSourceVEndpoint',
+  value:    'spec.endpoint',
+  sort:     'spec.endpoint',
+  align:    'left',
+};
+
+// Cluster Status column in migration.harvesterhci.io.vmwaresource list page
+export const VM_IMPORT_SOURCE_V_STATUS = {
+  name:     'clusterStatus',
+  labelKey: 'harvester.tableHeaders.vmImportSourceVClusterStatus',
+  value:    'status.status',
+  sort:     'status.status',
+  align:    'left',
+};
+
+// Region column in migration.harvesterhci.io.openstacksource list page
+export const VM_IMPORT_SOURCE_O_REGION = {
+  name:     'region',
+  labelKey: 'harvester.tableHeaders.vmImportSourceORegion',
+  value:    'spec.region',
+  sort:     'spec.region',
+  align:    'left',
+};
+
+// Endpoint column in migration.harvesterhci.io.openstacksource list page
+export const VM_IMPORT_SOURCE_O_ENDPOINT = {
+  name:     'endpoint',
+  labelKey: 'harvester.tableHeaders.vmImportSourceOEndpoint',
+  value:    'spec.endpoint',
+  sort:     'spec.endpoint',
+  align:    'left',
+};
+
+// Cluster Status column in migration.harvesterhci.io.openstacksource list page
+export const VM_IMPORT_SOURCE_O_STATUS = {
+  name:     'clusterStatus',
+  labelKey: 'harvester.tableHeaders.vmImportSourceOClusterStatus',
+  value:    'status.status',
+  sort:     'status.status',
+  align:    'left',
+};
+
+// URL column in migration.harvesterhci.io.ovasource list page
+export const VM_IMPORT_SOURCE_OVA_URL = {
+  name:     'url',
+  labelKey: 'harvester.tableHeaders.vmImportSourceOVAUrl',
+  value:    'spec.url',
+  sort:     'spec.url',
+  align:    'left',
+};
+
+// Status column in migration.harvesterhci.io.ovasource list page
+export const VM_IMPORT_SOURCE_OVA_STATUS = {
+  name:     'status',
+  labelKey: 'harvester.tableHeaders.vmImportSourceOVAStatus',
+  value:    'status.status',
+  sort:     'status.status',
+  align:    'left',
+};
+
+// ========================================
+// Forklift table headers
+// ========================================
+
+// Provider type column in forklift.konveyor.io.provider list page
+export const FORKLIFT_PROVIDER_TYPE = {
+  name:     'providerType',
+  labelKey: 'harvester.tableHeaders.vmMigrationProviderType',
+  value:    'spec.type',
+  sort:     'spec.type',
+  align:    'left',
+};
+
+// Provider URL column in forklift.konveyor.io.provider list page
+export const FORKLIFT_PROVIDER_URL = {
+  name:     'providerUrl',
+  labelKey: 'harvester.tableHeaders.vmMigrationProviderUrl',
+  value:    'spec.url',
+  sort:     'spec.url',
+  align:    'left',
+};
+
+// Source provider column in forklift network/storage map list page
+export const FORKLIFT_MAP_SOURCE_PROVIDER = {
+  name:     'sourceProvider',
+  labelKey: 'harvester.tableHeaders.vmMigrationMapSourceProvider',
+  value:    'spec.provider.source.name',
+  sort:     'spec.provider.source.name',
+  align:    'left',
+};
+
+// Destination provider column in forklift network/storage map list page
+export const FORKLIFT_MAP_DEST_PROVIDER = {
+  name:     'destProvider',
+  labelKey: 'harvester.tableHeaders.vmMigrationMapDestProvider',
+  value:    'spec.provider.destination.name',
+  sort:     'spec.provider.destination.name',
+  align:    'left',
+};
+
+// Target namespace column in forklift.konveyor.io.plan list page
+export const FORKLIFT_PLAN_TARGET_NS = {
+  name:     'targetNamespace',
+  labelKey: 'harvester.tableHeaders.vmMigrationPlanTargetNs',
+  value:    'spec.targetNamespace',
+  sort:     'spec.targetNamespace',
+  align:    'left',
+};
+
+// VM count column in forklift.konveyor.io.plan list page
+export const FORKLIFT_PLAN_VM_COUNT = {
+  name:     'vmCount',
+  labelKey: 'harvester.tableHeaders.vmMigrationPlanVmCount',
+  value:    'spec.vms.length',
+  sort:     'spec.vms.length',
+  align:    'center',
+};
+
+// Plan reference column in forklift.konveyor.io.migration list page
+export const FORKLIFT_MIGRATION_PLAN = {
+  name:     'plan',
+  labelKey: 'harvester.tableHeaders.vmMigrationMigrationPlan',
+  value:    'spec.plan.name',
+  sort:     'spec.plan.name',
+  align:    'left',
+};

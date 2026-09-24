@@ -1,44 +1,51 @@
 export const HCI_SETTING = {
-  BACKUP_TARGET:                          'backup-target',
-  CONTAINERD_REGISTRY:                    'containerd-registry',
-  LOG_LEVEL:                              'log-level',
-  SERVER_VERSION:                         'server-version',
-  UI_INDEX:                               'ui-index',
-  UPGRADE_CHECKER_ENABLED:                'upgrade-checker-enabled',
-  UPGRADE_CHECKER_URL:                    'upgrade-checker-url',
-  VLAN:                                   'vlan',
-  UI_SOURCE:                              'ui-source',
-  UI_PL:                                  'ui-pl',
-  HTTP_PROXY:                             'http-proxy',
-  ADDITIONAL_CA:                          'additional-ca',
-  OVERCOMMIT_CONFIG:                      'overcommit-config',
-  CLUSTER_REGISTRATION_URL:               'cluster-registration-url',
-  DEFAULT_STORAGE_CLASS:                  'default-storage-class',
-  SUPPORT_BUNDLE_TIMEOUT:                 'support-bundle-timeout',
-  SUPPORT_BUNDLE_EXPIRATION:              'support-bundle-expiration',
-  SUPPORT_BUNDLE_IMAGE:                   'support-bundle-image',
-  SUPPORT_BUNDLE_NODE_COLLECTION_TIMEOUT: 'support-bundle-node-collection-timeout',
-  STORAGE_NETWORK:                        'storage-network',
-  VM_FORCE_RESET_POLICY:                  'vm-force-reset-policy',
-  SSL_CERTIFICATES:                       'ssl-certificates',
-  SSL_PARAMETERS:                         'ssl-parameters',
-  SUPPORT_BUNDLE_NAMESPACES:              'support-bundle-namespaces',
-  AUTO_DISK_PROVISION_PATHS:              'auto-disk-provision-paths',
-  RELEASE_DOWNLOAD_URL:                   'release-download-url',
-  CCM_CSI_VERSION:                        'harvester-csi-ccm-versions',
-  CSI_DRIVER_CONFIG:                      'csi-driver-config',
-  CSI_ONLINE_EXPAND_VALIDATION:           'csi-online-expand-validation',
-  VM_TERMINATION_PERIOD:                  'default-vm-termination-grace-period-seconds',
-  NTP_SERVERS:                            'ntp-servers',
-  AUTO_ROTATE_RKE2_CERTS:                 'auto-rotate-rke2-certs',
-  KUBECONFIG_DEFAULT_TOKEN_TTL_MINUTES:   'kubeconfig-default-token-ttl-minutes',
-  LONGHORN_V2_DATA_ENGINE_ENABLED:        'longhorn-v2-data-engine-enabled',
-  ADDITIONAL_GUEST_MEMORY_OVERHEAD_RATIO: 'additional-guest-memory-overhead-ratio',
-  UPGRADE_CONFIG:                         'upgrade-config',
-  VM_MIGRATION_NETWORK:                   'vm-migration-network',
-  RANCHER_CLUSTER:                        'rancher-cluster',
-  MAX_HOTPLUG_RATIO:                      'max-hotplug-ratio',
-  KUBEVIRT_MIGRATION:                     'kubevirt-migration'
+  BACKUP_TARGET:                            'backup-target',
+  CONTAINERD_REGISTRY:                      'containerd-registry',
+  LOG_LEVEL:                                'log-level',
+  SERVER_VERSION:                           'server-version',
+  SERVER_FLAVOR:                            'server-flavor',
+  UI_INDEX:                                 'ui-index',
+  UPGRADE_CHECKER_ENABLED:                  'upgrade-checker-enabled',
+  UPGRADE_CHECKER_URL:                      'upgrade-checker-url',
+  VLAN:                                     'vlan',
+  UI_SOURCE:                                'ui-source',
+  UI_PL:                                    'ui-pl',
+  HTTP_PROXY:                               'http-proxy',
+  ADDITIONAL_CA:                            'additional-ca',
+  OVERCOMMIT_CONFIG:                        'overcommit-config',
+  CLUSTER_REGISTRATION_URL:                 'cluster-registration-url',
+  DEFAULT_STORAGE_CLASS:                    'default-storage-class',
+  SUPPORT_BUNDLE_TIMEOUT:                   'support-bundle-timeout',
+  SUPPORT_BUNDLE_EXPIRATION:                'support-bundle-expiration',
+  SUPPORT_BUNDLE_FILE_NAME:                 'support-bundle-file-name',
+  SUPPORT_BUNDLE_IMAGE:                     'support-bundle-image',
+  SUPPORT_BUNDLE_NODE_COLLECTION_TIMEOUT:   'support-bundle-node-collection-timeout',
+  STORAGE_NETWORK:                          'storage-network',
+  RWX_NETWORK:                              'rwx-network',
+  VM_FORCE_RESET_POLICY:                    'vm-force-reset-policy',
+  SSL_CERTIFICATES:                         'ssl-certificates',
+  SSL_PARAMETERS:                           'ssl-parameters',
+  SUPPORT_BUNDLE_NAMESPACES:                'support-bundle-namespaces',
+  AUTO_DISK_PROVISION_PATHS:                'auto-disk-provision-paths',
+  RELEASE_DOWNLOAD_URL:                     'release-download-url',
+  CCM_CSI_VERSION:                          'harvester-csi-ccm-versions',
+  CSI_DRIVER_CONFIG:                        'csi-driver-config',
+  CSI_ONLINE_EXPAND_VALIDATION:             'csi-online-expand-validation',
+  VM_TERMINATION_PERIOD:                    'default-vm-termination-grace-period-seconds',
+  NTP_SERVERS:                              'ntp-servers',
+  AUTO_ROTATE_RKE2_CERTS:                   'auto-rotate-rke2-certs',
+  KUBECONFIG_DEFAULT_TOKEN_TTL_MINUTES:     'kubeconfig-default-token-ttl-minutes',
+  LONGHORN_V2_DATA_ENGINE_ENABLED:          'longhorn-v2-data-engine-enabled',
+  LONGHORN_V2_DATA_ENGINE_HUGEPAGE_ENABLED: 'longhorn-v2-data-engine-hugepage-enabled',
+  LONGHORN_V2_DATA_ENGINE_MEMORY_SIZE:      'longhorn-v2-data-engine-memory-size',
+  ADDITIONAL_GUEST_MEMORY_OVERHEAD_RATIO:   'additional-guest-memory-overhead-ratio',
+  UPGRADE_CONFIG:                           'upgrade-config',
+  VM_MIGRATION_NETWORK:                     'vm-migration-network',
+  RANCHER_CLUSTER:                          'rancher-cluster',
+  MAX_HOTPLUG_RATIO:                        'max-hotplug-ratio',
+  KUBEVIRT_MIGRATION:                       'kubevirt-migration',
+  INSTANCE_MANAGER_RESOURCES:               'instance-manager-resources',
+  CLUSTER_POD_SECURITY_STANDARD:            'cluster-pod-security-standard'
 };
 
 export const HCI_ALLOWED_SETTINGS = {
@@ -62,6 +69,7 @@ export const HCI_ALLOWED_SETTINGS = {
     kind: 'json', from: 'import', featureFlag: 'csiOnlineExpandValidation'
   },
   [HCI_SETTING.SERVER_VERSION]:               { readOnly: true },
+  [HCI_SETTING.SERVER_FLAVOR]:                { readOnly: true },
   [HCI_SETTING.UPGRADE_CHECKER_ENABLED]:      { kind: 'boolean' },
   [HCI_SETTING.UPGRADE_CHECKER_URL]:          { kind: 'url' },
   [HCI_SETTING.HTTP_PROXY]:                   { kind: 'json', from: 'import' },
@@ -71,10 +79,16 @@ export const HCI_ALLOWED_SETTINGS = {
   [HCI_SETTING.OVERCOMMIT_CONFIG]:                      { kind: 'json', from: 'import' },
   [HCI_SETTING.SUPPORT_BUNDLE_TIMEOUT]:                 { kind: 'number' },
   [HCI_SETTING.SUPPORT_BUNDLE_EXPIRATION]:              { kind: 'number' },
+  [HCI_SETTING.SUPPORT_BUNDLE_FILE_NAME]:               {
+    kind: 'string', canReset: true, featureFlag: 'supportBundleFileNameSetting'
+  },
   [HCI_SETTING.SUPPORT_BUNDLE_NODE_COLLECTION_TIMEOUT]: { kind: 'number', featureFlag: 'supportBundleNodeCollectionTimeoutSetting' },
   [HCI_SETTING.SUPPORT_BUNDLE_IMAGE]:                   { kind: 'json', from: 'import' },
   [HCI_SETTING.STORAGE_NETWORK]:                        {
     kind: 'custom', from: 'import', canReset: true
+  },
+  [HCI_SETTING.RWX_NETWORK]:                            {
+    kind: 'json', from: 'import', canReset: true, featureFlag: 'rwxNetworkSetting'
   },
   [HCI_SETTING.VM_FORCE_RESET_POLICY]:                  { kind: 'json', from: 'import' },
   [HCI_SETTING.SSL_CERTIFICATES]:                       { kind: 'json', from: 'import' },
@@ -99,8 +113,18 @@ export const HCI_ALLOWED_SETTINGS = {
   [HCI_SETTING.KUBECONFIG_DEFAULT_TOKEN_TTL_MINUTES]:   { kind: 'number', featureFlag: 'kubeconfigDefaultTokenTTLMinutesSetting' },
   [HCI_SETTING.LONGHORN_V2_DATA_ENGINE_ENABLED]:        {
     kind:         'boolean',
-    experimental: true,
+    preview:      true,
     featureFlag:  'longhornV2LVMSupport'
+  },
+  [HCI_SETTING.LONGHORN_V2_DATA_ENGINE_HUGEPAGE_ENABLED]: {
+    kind:         'boolean',
+    preview:      true,
+    featureFlag:  'longhornV2HugepageSettings'
+  },
+  [HCI_SETTING.LONGHORN_V2_DATA_ENGINE_MEMORY_SIZE]: {
+    kind:         'number',
+    preview:      true,
+    featureFlag:  'longhornV2HugepageSettings'
   },
   [HCI_SETTING.ADDITIONAL_GUEST_MEMORY_OVERHEAD_RATIO]: { kind: 'string', from: 'import' },
   [HCI_SETTING.UPGRADE_CONFIG]:                         {
@@ -118,6 +142,12 @@ export const HCI_ALLOWED_SETTINGS = {
   },
   [HCI_SETTING.KUBEVIRT_MIGRATION]: {
     kind: 'json', from: 'import', canReset: true, featureFlag: 'kubevirtMigration',
+  },
+  [HCI_SETTING.INSTANCE_MANAGER_RESOURCES]: {
+    kind: 'json', from: 'import', featureFlag: 'instanceManagerResourcesSetting'
+  },
+  [HCI_SETTING.CLUSTER_POD_SECURITY_STANDARD]: {
+    kind: 'json', from: 'import', canReset: true, featureFlag: 'clusterPodSecurityStandardSetting'
   }
 };
 

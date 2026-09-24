@@ -9,8 +9,11 @@ import { LabeledInput } from '@components/Form/LabeledInput';
 import NameNsDescription from '@shell/components/form/NameNsDescription';
 import Conditions from '@shell/components/form/Conditions';
 import { Banner } from '@components/Banner';
+import { Checkbox } from '@components/Form/Checkbox';
+import jsyaml from 'js-yaml';
+import { exceptionToErrorsArray } from '@shell/utils/error';
 import { allHash } from '@shell/utils/promise';
-import { get } from '@shell/utils/object';
+import { clone, get } from '@shell/utils/object';
 import { STORAGE_CLASS, LONGHORN, PV } from '@shell/config/types';
 import { sortBy } from '@shell/utils/sort';
 import { saferDump } from '@shell/utils/create-yaml';
@@ -23,8 +26,10 @@ import { HCI, VOLUME_SNAPSHOT } from '../types';
 import { LVM_DRIVER } from '../models/harvester/storage.k8s.io.storageclass';
 import { DATA_ENGINE_V2 } from '../models/harvester/persistentvolumeclaim';
 import { GIBIBYTE } from '../utils/unit';
-import { VOLUME_MODE } from '@pkg/harvester/config/types';
+import { VOLUME_MODE, ACCESS_MODE } from '@pkg/harvester/config/types';
 import { isInternalStorageClass } from '../utils/storage-class';
+
+const { READ_WRITE_MANY, READ_WRITE_ONCE, READ_ONLY_MANY } = ACCESS_MODE;
 
 export default {
   name: 'HarvesterVolume',
@@ -33,6 +38,7 @@ export default {
 
   components: {
     Banner,
+    Checkbox,
     Tab,
     UnitInput,
     CruResource,
@@ -79,7 +85,7 @@ export default {
     if (this.mode === _CREATE) {
       // default volumeMode to Block
       this.value.spec.volumeMode = VOLUME_MODE.BLOCK;
-      this.value.spec.accessModes = ['ReadWriteMany'];
+      this.value.spec.accessModes = [READ_WRITE_MANY];
     }
 
     const storage = this.value?.spec?.resources?.requests?.storage || null;
@@ -90,14 +96,34 @@ export default {
       source,
       storage,
       imageId,
-      snapshots: [],
-      images:    [],
+      showAdvanced:         false,
+      createWithDataVolume: false,
+      snapshots:            [],
+      images:               [],
       GIBIBYTE
     };
   },
 
   created() {
     this.registerBeforeHook(this.willSave, 'willSave');
+
+    if (this.mode === _CREATE) {
+      const originalSaveYaml = this.value.saveYaml?.bind(this.value);
+
+      this.value.saveYaml = async(yaml) => {
+        if (this.createWithDataVolume && this.isBlank) {
+          const parsed = jsyaml.load(yaml);
+          const dvObj = { ...parsed, type: 'cdi.kubevirt.io.datavolume' };
+          const dataVolume = await this.$store.dispatch('harvester/create', dvObj);
+
+          await dataVolume.save();
+
+          return dataVolume;
+        }
+
+        return originalSaveYaml(yaml);
+      };
+    }
   },
 
   computed: {
@@ -133,6 +159,10 @@ export default {
 
     volumeModeOptions() {
       return Object.values(VOLUME_MODE);
+    },
+
+    accessModeOptions() {
+      return [READ_WRITE_ONCE, READ_WRITE_MANY, READ_ONLY_MANY];
     },
 
     imageOption() {
@@ -275,6 +305,10 @@ export default {
       return this.$store.getters['harvester-common/getFeatureEnabled']('lhV2VolExpansion');
     },
 
+    isCreatePVCWithDataVolumeFeatureEnabled() {
+      return this.$store.getters['harvester-common/getFeatureEnabled']('createPVCWithDataVolume');
+    },
+
     isResizeDisabled() {
       return (
         !this.isLHV2VolExpansionFeatureEnabled &&
@@ -323,7 +357,7 @@ export default {
 
     getAccessMode() {
       if (!this.longhornV2LVMSupport) {
-        return ['ReadWriteMany'];
+        return [READ_WRITE_MANY];
       }
 
       if (this.value?.spec?.accessModes && this.value?.spec?.accessModes?.length > 0) {
@@ -339,8 +373,60 @@ export default {
         readWriteOnce = storageClass.provisioner === LVM_DRIVER || (!this.value.thirdPartyStorageFeatureEnabled && storageClass.parameters?.dataEngine === DATA_ENGINE_V2);
       }
 
-      return readWriteOnce ? ['ReadWriteOnce'] : ['ReadWriteMany'];
+      return readWriteOnce ? [READ_WRITE_ONCE] : [READ_WRITE_MANY];
     },
+    buildDataVolumeObj() {
+      const storage = {
+        storageClassName: this.value.spec.storageClassName,
+        resources:        { requests: { storage: this.storage } },
+      };
+
+      if (this.showAdvanced && this.value.spec.accessModes?.length > 0) {
+        storage.accessModes = this.value.spec.accessModes;
+      }
+
+      if (this.showAdvanced && this.value.spec.volumeMode) {
+        storage.volumeMode = this.value.spec.volumeMode;
+      }
+
+      return {
+        type:       'cdi.kubevirt.io.datavolume',
+        apiVersion: 'cdi.kubevirt.io/v1beta1',
+        kind:       'DataVolume',
+        metadata:   {
+          name:        this.value.metadata.name,
+          namespace:   this.value.metadata.namespace,
+          annotations: this.value.metadata.annotations || {},
+          labels:      this.value.metadata.labels || {},
+        },
+        spec: {
+          source: { blank: {} },
+          storage,
+        }
+      };
+    },
+
+    async save(buttonDone) {
+      if (this.isCreate && this.isBlank && this.createWithDataVolume) {
+        try {
+          this.update();
+          const dvObj = this.buildDataVolumeObj();
+          const dataVolume = await this.$store.dispatch('harvester/create', dvObj);
+
+          await dataVolume.save();
+          buttonDone(true);
+          this.done();
+        } catch (err) {
+          const error = err?.data || err;
+
+          this['errors'] = exceptionToErrorsArray(error);
+          buttonDone(false);
+        }
+      } else {
+        await CreateEditView.methods.save.call(this, buttonDone);
+      }
+    },
+
     willSave() {
       this.update();
     },
@@ -383,9 +469,17 @@ export default {
       this.update();
     },
     generateYaml() {
-      const out = saferDump(this.value);
+      this.update();
 
-      return out;
+      if (this.isCreate && this.isBlank && this.createWithDataVolume) {
+        return saferDump(this.buildDataVolumeObj());
+      }
+
+      const plain = clone(this.value);
+
+      delete plain.saveYaml;
+
+      return saferDump(plain);
     },
   }
 };
@@ -458,18 +552,6 @@ export default {
           @update:value="update"
         />
 
-        <LabeledSelect
-          v-if="showVolumeMode"
-          v-model:value="value.spec.volumeMode"
-          :label="t('harvester.volume.volumeMode')"
-          :options="volumeModeOptions"
-          required
-          :disabled="!isCreate"
-          :mode="mode"
-          class="mb-20"
-          @update:value="update"
-        />
-
         <UnitInput
           v-model:value="storage"
           :label="t('harvester.volume.size')"
@@ -490,6 +572,44 @@ export default {
         >
           <span>{{ t('harvester.volume.longhorn.disableResize') }}</span>
         </Banner>
+
+        <div class="row mb-20">
+          <Checkbox
+            v-if="isCreate && isBlank && isCreatePVCWithDataVolumeFeatureEnabled"
+            v-model:value="createWithDataVolume"
+            :label="t('harvester.volume.createWithDataVolume')"
+            tooltip-key="harvester.volume.createWithDataVolumeTooltip"
+          />
+        </div>
+        <a
+          v-if="isCreate && isCreatePVCWithDataVolumeFeatureEnabled"
+          role="button"
+          class="hand"
+          @click="showAdvanced = !showAdvanced"
+        >
+          {{ showAdvanced ? t('harvester.volume.hideAdvanced') : t('harvester.volume.showAdvanced') }}
+        </a>
+
+        <LabeledSelect
+          v-if="showAdvanced"
+          v-model:value="value.spec.accessModes"
+          :label="t('harvester.volume.accessModes')"
+          :options="accessModeOptions"
+          :multiple="true"
+          :mode="mode"
+          class="mb-20 mt-20"
+          @update:value="update"
+        />
+
+        <LabeledSelect
+          v-if="showAdvanced"
+          v-model:value="value.spec.volumeMode"
+          :label="t('harvester.volume.volumeMode')"
+          :options="volumeModeOptions"
+          :mode="mode"
+          class="mb-20"
+          @update:value="update"
+        />
       </Tab>
       <Tab
         v-if="!isCreate"

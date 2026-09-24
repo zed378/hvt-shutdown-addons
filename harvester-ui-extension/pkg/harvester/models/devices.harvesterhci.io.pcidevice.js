@@ -1,6 +1,8 @@
 import SteveModel from '@shell/plugins/steve/steve-class';
 import { escapeHtml } from '@shell/utils/string';
 import { HCI } from '../types';
+import { HCI as HCI_ANNOTATIONS } from '@pkg/harvester/config/labels-annotations';
+import { getHarvesterUserName } from '../utils/auth';
 
 const STATUS_DISPLAY = {
   enabled: {
@@ -32,7 +34,7 @@ export default class PCIDevice extends SteveModel {
     out.push(
       {
         action:     'enablePassthroughBulk',
-        enabled:    !this.isEnabling,
+        enabled:    !this.isEnabling && !this.isvGPUDevice && this.canUpdate,
         icon:       'icon icon-fw icon-dot',
         label:      'Enable Passthrough',
         bulkable:   true,
@@ -41,7 +43,7 @@ export default class PCIDevice extends SteveModel {
       },
       {
         action:   'disablePassthrough',
-        enabled:  this.isEnabling && this.claimedByMe,
+        enabled:  this.isEnabling && this.claimedByMe && !this.isvGPUDevice && this.canUpdate,
         icon:     'icon icon-fw icon-dot-open',
         label:    'Disable Passthrough',
         bulkable: true,
@@ -50,6 +52,18 @@ export default class PCIDevice extends SteveModel {
     );
 
     return out;
+  }
+
+  get canUpdate() {
+    return !!this.linkFor('update');
+  }
+
+  get isvGPUDevice() {
+    if (!this.vGPUAsPCIDeviceFeatureEnabled) {
+      return false;
+    }
+
+    return !!this.metadata?.labels?.[HCI_ANNOTATIONS.PARENT_SRIOV_GPU];
   }
 
   get canYaml() {
@@ -87,15 +101,8 @@ export default class PCIDevice extends SteveModel {
     if (!this.passthroughClaim) {
       return false;
     }
-    const isSingleProduct = this.$rootGetters['isSingleProduct'];
-    let userName = 'admin';
 
-    // if this is imported Harvester, there may be users other than admin
-    if (!isSingleProduct) {
-      const user = this.$rootGetters['auth/v3User'];
-
-      userName = user?.username || user?.id;
-    }
+    const userName = getHarvesterUserName(this.$rootGetters);
 
     return this.claimedBy === userName;
   }
@@ -144,6 +151,12 @@ export default class PCIDevice extends SteveModel {
   // 'disable' passthrough deletes claim
   // backend should return error if device is in use
   async disablePassthrough() {
+    if (!this.allowDisable) {
+      this.showDetachWarning();
+
+      return;
+    }
+
     try {
       if (!this.claimedByMe) {
         throw new Error(this.$rootGetters['i18n/t']('harvester.pci.cantUnclaim', { name: escapeHtml(this.metadata.name) }));
@@ -168,5 +181,25 @@ export default class PCIDevice extends SteveModel {
   // group device list by unique device (same vendorid and deviceid)
   get groupByDevice() {
     return this.status?.description;
+  }
+
+  get vGPUAsPCIDeviceFeatureEnabled() {
+    return this.$rootGetters['harvester-common/getFeatureEnabled']('vGPUAsPCIDevice');
+  }
+
+  showDetachWarning() {
+    this.$dispatch('growl/warning', {
+      title:   this.$rootGetters['i18n/t']('harvester.pci.detachWarning.title'),
+      message: this.$rootGetters['i18n/t']('harvester.pci.detachWarning.message'),
+      timeout: 5000
+    }, { root: true });
+  }
+
+  get allowDisable() {
+    return this._allowDisable;
+  }
+
+  set allowDisable(value) {
+    this._allowDisable = value;
   }
 }

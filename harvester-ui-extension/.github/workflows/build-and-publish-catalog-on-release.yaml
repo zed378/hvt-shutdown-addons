@@ -1,0 +1,36 @@
+name: Build Harvester Catalog Image and Publish on Release
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+defaults:
+  run:
+    shell: bash
+    working-directory: ./
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Check package version
+        env:
+          TAG_VERSION: ${{ github.event.release.tag_name }}
+        run: ./scripts/check-version.sh $TAG_VERSION
+
+  build-and-push-extension-catalog:
+    needs: check-version
+    uses: ./.github/workflows/build-extension-catalog.yml
+    permissions:
+      actions: write
+      contents: read
+      packages: write
+      id-token: write
+    with:
+      registry_target: docker.io
+      registry_user: rancher
+    secrets: inherit

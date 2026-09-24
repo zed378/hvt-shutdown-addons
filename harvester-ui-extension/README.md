@@ -5,14 +5,27 @@ The Harvester UI Extension is a Rancher extension that provides the user interfa
 > **Note:**
 > This extension is available starting from **Rancher 2.10.0**. Ensure your Rancher version is **2.10.0 or later** to access Harvester integration.
 
+## Table of Contents
+
+- [Installation](#installation)
+- [Development Setup](#development-setup)
+- [Commit Message Guidelines](#commit-message-guidelines)
+- [Branch Structure](#branch-structure)
+- [Testing Guidelines](#testing-guidelines)
+- [Release](#release)
+- [Contributing](#contributing)
+- [License](#license)
+
+
+
 ## Installation
 
-For detailed installation instructions, please refer to the [official Harvester documentation](https://docs.harvesterhci.io/v1.5/rancher/harvester-ui-extension#installation-on-rancher-210).
+For Harvester UI extension installation instructions, please refer to the page **Rancher Integration** -> **Harvester UI Extension** in [official Harvester documentation](https://docs.harvesterhci.io).
 
 
 ## Development Setup
 
-Ensure **Node.js v20 or later** is installed for development and debugging.
+Ensure **Node.js v24 or later** is installed for development and debugging.
 
 ### Standalone Mode
 
@@ -157,13 +170,20 @@ To test the standalone UI, configure Harvester to load the UI from an external s
 2. Set **ui-source** to `External`
 3. Set **ui-index** to the desired URL
 
+
+## Release
+
+The Harvester UI Extension follows the [Harvester](https://github.com/harvester/harvester) release cycle. After RC1 is cut for a new Harvester version, we usually create and work from the corresponding release branch (for example, `release-harvester-v1.8`). The remaining RC builds and the final official release are published from that branch.
+
+After Harvester releases a new version, update the Harvester entry in rancher/ui-plugin-charts [manifest.json](https://github.com/rancher/ui-plugin-charts/blob/aafd215debbc6cb3100e7ba4b0a542c932397acd/manifest.json#L133-L151). This ensures air-gapped users can pull the new Harvester UI Extension image.
+
 ## Contributing
 
 If you want to contribute, start by reading this document, then visit our [Getting Started guide](https://extensions.rancher.io/extensions/next/extensions-getting-started) to learn how to develop and submit changes.
 
 ## License
 
-Copyright (c) 2014-2025 [SUSE, LLC.](https://www.suse.com/)
+Copyright (c) 2014-2026 [SUSE, LLC.](https://www.suse.com/)
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

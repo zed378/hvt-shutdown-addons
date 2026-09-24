@@ -1,0 +1,15 @@
+name: Setup UI Env
+description: Setup node and install dependencies
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Nodejs with yarn caching
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version-file: '.nvmrc'
+        cache: 'yarn'
+
+    - name: Install packages
+      shell: bash
+      run: yarn install

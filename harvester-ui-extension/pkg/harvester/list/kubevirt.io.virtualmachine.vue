@@ -1,4 +1,5 @@
 <script>
+import { mapGetters } from 'vuex';
 import ResourceTable from '@shell/components/ResourceTable';
 import { STATE, AGE, NAME, NAMESPACE } from '@shell/config/table-headers';
 import {
@@ -12,11 +13,18 @@ import { HCI } from '../types';
 import HarvesterVmState from '../formatters/HarvesterVmState';
 import ConsoleBar from '../components/VMConsoleBar';
 
+const ENCRYPTED_VOLUME_TOOLTIP_KEYS = {
+  all:     'harvester.virtualMachine.volume.lockTooltip.all',
+  partial: 'harvester.virtualMachine.volume.lockTooltip.partial',
+};
+
 export const VM_HEADERS = [
   STATE,
   {
     ...NAME,
     width: 350,
+    value: 'nameDisplay',
+    sort:  ['nameDisplay'],
   },
   NAMESPACE,
   {
@@ -93,33 +101,24 @@ export default {
       this.hasNode = true;
     }
 
-    if (this.$store.getters[`${ inStore }/schemaFor`](HCI.NODE_NETWORK)) {
-      _hash.nodeNetworks = this.$store.dispatch(`${ inStore }/findAll`, { type: HCI.NODE_NETWORK });
-    }
-
-    if (this.$store.getters[`${ inStore }/schemaFor`](HCI.CLUSTER_NETWORK)) {
-      _hash.clusterNetworks = this.$store.dispatch(`${ inStore }/findAll`, { type: HCI.CLUSTER_NETWORK });
-    }
-
     const hash = await allHash(_hash);
 
     this.allVMs = hash.vms;
-    this.allNodeNetworks = hash.nodeNetworks || [];
-    this.allClusterNetworks = hash.clusterNetworks || [];
   },
 
   data() {
     return {
-      hasNode:            false,
-      allVMs:             [],
-      allVMIs:            [],
-      allNodeNetworks:    [],
-      allClusterNetworks: [],
+      hasNode:                      false,
+      allVMs:                       [],
+      allVMIs:                      [],
+      restartNotificationDisplayed: false,
       HCI
     };
   },
 
   computed: {
+    ...mapGetters({ actionCb: 'action-menu/performCallbackData' }),
+
     headers() {
       const restoreCol = {
         name:      'restoreProgress',
@@ -162,6 +161,12 @@ export default {
      */
     hasBackUpRestoreInProgress() {
       return !!this.rows.find((r) => r.restoreResource && !r.restoreResource.fromSnapshot && !r.restoreResource.isComplete);
+    },
+
+    vmRestartRequiredNames() {
+      return this.allVMs
+        .filter((vm) => vm.isRestartRequired)
+        .map((vm) => vm.metadata.name);
     }
   },
 
@@ -174,17 +179,48 @@ export default {
     this['allVMIs'] = vmis;
   },
 
-  methods: {
-    lockIconTooltipMessage(row) {
-      const message = '';
+  beforeUnmount() {
+    // clear restart message before component unmount
+    this.$store.dispatch('growl/clear');
+  },
 
-      if (row.encryptedVolumeType === 'all') {
-        return this.t('harvester.virtualMachine.volume.lockTooltip.all');
-      } else if (row.encryptedVolumeType === 'partial') {
-        return this.t('harvester.virtualMachine.volume.lockTooltip.partial');
+  watch: {
+    actionCb(neu) {
+      if (neu?.clearTableSelection) {
+        this.$refs.resourceTable.clearSelection();
+        this.$store.dispatch('action-menu/clearCallbackData');
+      }
+    },
+
+    vmRestartRequiredNames(vmNames) {
+      const count = vmNames.length;
+
+      if (count === 0 && this.restartNotificationDisplayed) {
+        this.restartNotificationDisplayed = false;
+
+        return;
       }
 
-      return message;
+      if (count > 0) {
+        // clear old notification before showing new one
+        if (this.restartNotificationDisplayed) {
+          this.$store.dispatch('growl/clear');
+        }
+
+        this.$store.dispatch('growl/warning', {
+          title:   this.t('harvester.notification.restartRequired.title', { count }),
+          message: this.t('harvester.notification.restartRequired.message', { vmNames: vmNames.join(', ') }),
+          timeout: 10000,
+        }, { root: true });
+        this.restartNotificationDisplayed = true;
+      }
+    }
+  },
+  methods: {
+    lockIconTooltipMessage(row) {
+      const key = ENCRYPTED_VOLUME_TOOLTIP_KEYS[row.encryptedVolumeType];
+
+      return key ? this.t(key) : '';
     }
   }
 };
@@ -194,6 +230,7 @@ export default {
   <Loading v-if="$fetchState.pending" />
   <div v-else>
     <ResourceTable
+      ref="resourceTable"
       v-bind="$attrs"
       :headers="headers"
       default-sort-by="age"
@@ -210,8 +247,6 @@ export default {
           <HarvesterVmState
             class="vmstate"
             :row="scope.row"
-            :all-node-network="allNodeNetworks"
-            :all-cluster-network="allClusterNetworks"
           />
         </div>
       </template>
@@ -222,16 +257,16 @@ export default {
             v-if="scope.row.type !== HCI.VMI"
             :to="scope.row.detailLocation"
           >
-            {{ scope.row.metadata.name }}
+            {{ scope.row.nameDisplay }}
             <i
-              v-if="lockIconTooltipMessage(scope.row)"
+              v-if="scope.row.encryptedVolumeType !== 'none'"
               v-tooltip="lockIconTooltipMessage(scope.row)"
               class="icon icon-lock"
               :class="{'green-icon': scope.row.encryptedVolumeType === 'all', 'yellow-icon': scope.row.encryptedVolumeType === 'partial'}"
             />
           </router-link>
           <span v-else>
-            {{ scope.row.metadata.name }}
+            {{ scope.row.nameDisplay }}
           </span>
           <ConsoleBar
             :resource-type="scope.row"
@@ -242,6 +277,12 @@ export default {
     </ResourceTable>
   </div>
 </template>
+
+<style lang="scss">
+.growl-container {
+  z-index: 56 !important;  // set to be lower than the vm action menu (z-index: 57)
+}
+</style>
 
 <style lang="scss" scoped>
 .state {

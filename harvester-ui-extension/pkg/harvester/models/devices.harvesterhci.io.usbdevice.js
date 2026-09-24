@@ -1,6 +1,7 @@
 import SteveModel from '@shell/plugins/steve/steve-class';
 import { escapeHtml } from '@shell/utils/string';
 import { HCI } from '../types';
+import { getHarvesterUserName } from '../utils/auth';
 
 const STATUS_DISPLAY = {
   enabled: {
@@ -32,7 +33,7 @@ export default class USBDevice extends SteveModel {
     out.push(
       {
         action:     'enablePassthroughBulk',
-        enabled:    !this.passthroughClaim && !this.status.enabled,
+        enabled:    !this.passthroughClaim && !this.status.enabled && this.canUpdate,
         icon:       'icon icon-fw icon-dot',
         label:      'Enable Passthrough',
         bulkable:   true,
@@ -41,7 +42,7 @@ export default class USBDevice extends SteveModel {
       },
       {
         action:   'disablePassthrough',
-        enabled:  this.status.enabled,
+        enabled:  this.status.enabled && this.canUpdate,
         icon:     'icon icon-fw icon-dot-open',
         label:    'Disable Passthrough',
         bulkable: true,
@@ -50,6 +51,10 @@ export default class USBDevice extends SteveModel {
     );
 
     return out;
+  }
+
+  get canUpdate() {
+    return !!this.linkFor('update');
   }
 
   get canYaml() {
@@ -87,15 +92,8 @@ export default class USBDevice extends SteveModel {
     if (!this.passthroughClaim) {
       return false;
     }
-    const isSingleProduct = this.$rootGetters['isSingleProduct'];
-    let userName = 'admin';
 
-    // if this is imported Harvester, there may be users other than admin
-    if (!isSingleProduct) {
-      const user = this.$rootGetters['auth/v3User'];
-
-      userName = user?.username || user?.id;
-    }
+    const userName = getHarvesterUserName(this.$rootGetters);
 
     return this.claimedBy === userName;
   }
@@ -133,6 +131,12 @@ export default class USBDevice extends SteveModel {
   // 'disable' passthrough deletes claim
   // backend should return error if device is in use
   async disablePassthrough() {
+    if (!this.allowDisable) {
+      this.showDetachWarning();
+
+      return;
+    }
+
     try {
       if (!this.claimedByMe) {
         throw new Error(this.$rootGetters['i18n/t']('harvester.usb.cantUnclaim', { name: escapeHtml(this.metadata.name) }));
@@ -157,5 +161,21 @@ export default class USBDevice extends SteveModel {
   // group device list by unique device (same vendorid and deviceid)
   get groupByDevice() {
     return this.status?.description;
+  }
+
+  showDetachWarning() {
+    this.$dispatch('growl/warning', {
+      title:   this.$rootGetters['i18n/t']('harvester.usb.detachWarning.title'),
+      message: this.$rootGetters['i18n/t']('harvester.usb.detachWarning.message'),
+      timeout: 5000
+    }, { root: true });
+  }
+
+  get allowDisable() {
+    return this._allowDisable;
+  }
+
+  set allowDisable(value) {
+    this._allowDisable = value;
   }
 }

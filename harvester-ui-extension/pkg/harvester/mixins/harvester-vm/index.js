@@ -12,7 +12,7 @@ import { base64Decode } from '@shell/utils/crypto';
 import { formatSi, parseSi } from '@shell/utils/units';
 import { _CLONE, _CREATE, _VIEW } from '@shell/config/query-params';
 import {
-  PV, PVC, STORAGE_CLASS, NODE, SECRET, CONFIG_MAP, NETWORK_ATTACHMENT, NAMESPACE, LONGHORN
+  PV, PVC, STORAGE_CLASS, NODE, SECRET, CONFIG_MAP, SERVICE_ACCOUNT, NETWORK_ATTACHMENT, NAMESPACE, LONGHORN
 } from '@shell/config/types';
 import { HOSTNAME } from '@shell/config/labels-annotations';
 import { HCI as HCI_ANNOTATIONS } from '@pkg/harvester/config/labels-annotations';
@@ -22,10 +22,12 @@ import {
 } from '../../config/harvester-map';
 import { HCI_SETTING } from '../../config/settings';
 import { HCI } from '../../types';
-import { parseVolumeClaimTemplates } from '../../utils/vm';
+import { parseVolumeClaimTemplates, EMPTY_IMAGE } from '../../utils/vm';
 import impl, { QGA_JSON, USB_TABLET } from './impl';
 import { GIBIBYTE } from '../../utils/unit';
-import { VOLUME_MODE } from '@pkg/harvester/config/types';
+import { VOLUME_MODE, ACCESS_MODE, FILESYSTEM_SOURCE_TYPE } from '@pkg/harvester/config/types';
+
+const { READ_WRITE_MANY } = ACCESS_MODE;
 
 const LONGHORN_V2_DATA_ENGINE = 'longhorn-system/v2-data-engine';
 
@@ -102,6 +104,8 @@ export default {
       vmims:             this.$store.dispatch(`${ inStore }/findAll`, { type: HCI.VMIM }),
       vms:               this.$store.dispatch(`${ inStore }/findAll`, { type: HCI.VM }),
       secrets:           this.$store.dispatch(`${ inStore }/findAll`, { type: SECRET }),
+      configMaps:        this.$store.dispatch(`${ inStore }/findAll`, { type: CONFIG_MAP }),
+      serviceAccounts:   this.$store.dispatch(`${ inStore }/findAll`, { type: SERVICE_ACCOUNT }),
       addons:            this.$store.dispatch(`${ inStore }/findAll`, { type: HCI.ADD_ONS }),
       longhornV2Engine:  this.$store.dispatch(`${ inStore }/find`, { type: LONGHORN.SETTINGS, id: LONGHORN_V2_DATA_ENGINE }),
     };
@@ -156,9 +160,16 @@ export default {
       imageId:                       '',
       diskRows:                      [],
       networkRows:                   [],
+      filesystemRows:                [],
       machineType:                   '',
       machineTypes:                  [],
       secretName:                    '',
+      // Tracks the name prefix that `secretName` was generated from, so it can be
+      // regenerated if the VM name changes (e.g. after a failed create attempt is retried
+      // with a different name). See harvester/harvester#11174.
+      secretNamePrefixUsed:          '',
+      // Same purpose as secretNamePrefixUsed, but for the Windows sysprep secret name.
+      sysprepSecretNamePrefixUsed:   '',
       secretRef:                     null,
       showAdvanced:                  false,
       deleteAgent:                   true,
@@ -182,6 +193,8 @@ export default {
       immutableMode:                 this.realMode === _CREATE ? _CREATE : _VIEW,
       terminationGracePeriodSeconds: '',
       cpuPinning:                    false,
+      cpuModel:                      '',
+      sysprep:                       { secretName: '', xmlContent: '' },
     };
   },
 
@@ -265,7 +278,7 @@ export default {
     },
 
     customAccessMode() {
-      return this.storageClassSetting.accessModes || 'ReadWriteMany';
+      return this.storageClassSetting.accessModes || READ_WRITE_MANY;
     },
 
     isWindows() {
@@ -394,6 +407,7 @@ export default {
       const efiPersistentStateEnabled = this.isEFIPersistentStateEnabled(spec);
       const secureBoot = this.isSecureBoot(spec);
       const cpuPinning = this.isCpuPinning(spec);
+      const cpuModel = spec.template.spec.domain.cpu?.model || '';
 
       const secretRef = this.getSecret(spec);
       const accessCredentials = this.getAccessCredentials(spec);
@@ -431,12 +445,25 @@ export default {
       this['tpmPersistentStateEnabled'] = tpmPersistentStateEnabled;
       this['secureBoot'] = secureBoot;
       this['cpuPinning'] = cpuPinning;
+      this['cpuModel'] = cpuModel;
 
       this['hasCreateVolumes'] = hasCreateVolumes;
       this['networkRows'] = networkRows;
       this['imageId'] = imageId;
 
       this['diskRows'] = diskRows;
+      this['filesystemRows'] = this.getFilesystemRows(vm);
+
+      let sysprepConfig = { secretName: '', xmlContent: '' };
+
+      if (osType === 'windows') {
+        sysprepConfig = this.getSysprepConfig(spec);
+      }
+
+      this['sysprep'] = {
+        secretName: sysprepConfig.secretName || this.sysprep?.secretName || '',
+        xmlContent: sysprepConfig.xmlContent || this.sysprep?.xmlContent || '',
+      };
 
       this.refreshYamlEditor();
     },
@@ -479,7 +506,7 @@ export default {
           id:               randomStr(5),
           source:           SOURCE_TYPE.IMAGE,
           name:             'disk-0',
-          accessMode:       'ReadWriteMany', // root disk only support LHv1 volume, should be RWX
+          accessMode:       READ_WRITE_MANY, // root disk only support LHv1 volume, should be RWX
           bus,
           volumeName:       '',
           size,
@@ -508,12 +535,15 @@ export default {
 
           const type = DISK?.cdrom ? CD_ROM : DISK?.disk ? HARD_DISK : '';
 
-          if (volume?.containerDisk) { // SOURCE_TYPE.CONTAINER
+          if (type === CD_ROM && volume === undefined) {
+            // Empty CD_ROM
+            source = SOURCE_TYPE.IMAGE;
+            image = EMPTY_IMAGE;
+            size = `0${ GIBIBYTE }`;
+          } else if (volume.containerDisk) { // SOURCE_TYPE.CONTAINER
             source = SOURCE_TYPE.CONTAINER;
             container = volume.containerDisk.image;
-          }
-
-          if (volume.persistentVolumeClaim && volume.persistentVolumeClaim?.claimName) {
+          } else if (volume.persistentVolumeClaim && volume.persistentVolumeClaim?.claimName) {
             volumeName = volume.persistentVolumeClaim.claimName;
             const DVT = _volumeClaimTemplates.find( (T) => T.metadata.name === volumeName);
 
@@ -542,7 +572,7 @@ export default {
               const pvcResource = allPVCs.find( (O) => O.id === `${ namespace }/${ volume?.persistentVolumeClaim?.claimName }`);
 
               source = SOURCE_TYPE.ATTACH_VOLUME;
-              accessMode = pvcResource?.spec?.accessModes?.[0] || 'ReadWriteMany';
+              accessMode = pvcResource?.spec?.accessModes?.[0] || READ_WRITE_MANY;
               size = pvcResource?.spec?.resources?.requests?.storage || '10Gi';
               storageClassName = pvcResource?.spec?.storageClassName;
               volumeMode = pvcResource?.spec?.volumeMode || VOLUME_MODE.BLOCK;
@@ -588,6 +618,7 @@ export default {
             type,
             storageClassName,
             hotpluggable,
+            shareable:  DISK.shareable || false,
             volumeStatus,
             dataSource,
             namespace,
@@ -599,7 +630,8 @@ export default {
 
       out = sortBy(out, 'bootOrder');
 
-      return out.filter( (O) => O.name !== 'cloudinitdisk');
+      // Filter out cloudinitdisk and sysprep disk from UI display.
+      return out.filter( (O) => O.name !== 'cloudinitdisk' && O.name !== 'sysprep');
     },
 
     getNetworkRows(vm, config) {
@@ -607,6 +639,8 @@ export default {
 
       const networks = vm.spec.template.spec.networks || [];
       const interfaces = vm.spec.template.spec.domain.devices.interfaces || [];
+      const annotations = vm.metadata?.annotations || {};
+      const staticIpPrefix = `${ HCI_ANNOTATIONS.STATIC_IP }/`;
 
       const out = interfaces.map( (I, index) => {
         const network = networks.find( (N) => I.name === N.name);
@@ -623,6 +657,7 @@ export default {
           newCreateId: (fromTemplate || init) ? randomStr(10) : false,
           model:       I.model,
           networkName: isPod ? MANAGEMENT_NETWORK : network?.multus?.networkName,
+          staticIp:    annotations[`${ staticIpPrefix }${ I.name }`] || '',
         };
       });
 
@@ -635,6 +670,80 @@ export default {
       this.parseAccessCredentials();
       this.parseNetworkRows(this.networkRows);
       this.parseDiskRows(this.diskRows);
+      this.parseFilesystemRows();
+    },
+
+    getFilesystemRows(vm) {
+      const _filesystems = vm.spec.template.spec.domain.devices?.filesystems || [];
+      const _volumes = vm.spec.template.spec.volumes || [];
+
+      return _filesystems.map((fs) => {
+        const volume = _volumes.find((v) => v.name === fs.name);
+        let fsType = FILESYSTEM_SOURCE_TYPE.CONFIGMAP;
+        let resourceName = '';
+
+        if (volume?.configMap) {
+          fsType = FILESYSTEM_SOURCE_TYPE.CONFIGMAP;
+          resourceName = volume.configMap.name;
+        } else if (volume?.secret) {
+          fsType = FILESYSTEM_SOURCE_TYPE.SECRET;
+          resourceName = volume.secret.secretName;
+        } else if (volume?.serviceAccount) {
+          fsType = FILESYSTEM_SOURCE_TYPE.SERVICEACCOUNT;
+          resourceName = volume.serviceAccount.serviceAccountName;
+        }
+
+        return {
+          fsType,
+          volumeName: fs.name,
+          resourceName,
+        };
+      });
+    },
+
+    parseFilesystemRows() {
+      const completedRows = this.filesystemRows.filter(
+        (r) => r.fsType && r.volumeName && r.resourceName
+      );
+
+      const filesystems = completedRows.map((r) => ({
+        name:     r.volumeName,
+        virtiofs: {},
+      }));
+
+      const fsVolumes = completedRows.map((r) => {
+        if (r.fsType === FILESYSTEM_SOURCE_TYPE.CONFIGMAP) {
+          return {
+            name:      r.volumeName,
+            configMap: { name: r.resourceName },
+          };
+        } else if (r.fsType === FILESYSTEM_SOURCE_TYPE.SECRET) {
+          return {
+            name:   r.volumeName,
+            secret: { secretName: r.resourceName },
+          };
+        } else if (r.fsType === FILESYSTEM_SOURCE_TYPE.SERVICEACCOUNT) {
+          return {
+            name:           r.volumeName,
+            serviceAccount: { serviceAccountName: r.resourceName },
+          };
+        }
+
+        return null;
+      }).filter(Boolean);
+
+      if (filesystems.length > 0) {
+        this.spec.template.spec.domain.devices['filesystems'] = filesystems;
+      } else {
+        delete this.spec.template.spec.domain.devices['filesystems'];
+      }
+
+      if (fsVolumes.length > 0) {
+        if (!this.spec.template.spec.volumes) {
+          this.spec.template.spec['volumes'] = [];
+        }
+        this.spec.template.spec.volumes.push(...fsVolumes);
+      }
     },
 
     parseOther() {
@@ -649,6 +758,8 @@ export default {
       this.spec.template.spec.terminationGracePeriodSeconds = this.terminationGracePeriodSeconds;
 
       const vm = this.resourceType === HCI.VM ? this.value : this.value.spec.vm;
+
+      this.syncStaticIpAnnotations(vm);
 
       // parse reserved memory
       if (!this.reservedMemory) {
@@ -669,6 +780,53 @@ export default {
       } else {
         vm.metadata.labels[HCI_ANNOTATIONS.VM_MAINTENANCE_MODE_STRATEGY] = this.maintenanceStrategy;
       }
+    },
+
+    syncStaticIpAnnotations(vm) {
+      if (!vm?.metadata) {
+        return;
+      }
+
+      if (!vm.metadata.annotations) {
+        vm.metadata.annotations = {};
+      }
+
+      const staticIpPrefix = `${ HCI_ANNOTATIONS.STATIC_IP }/`;
+      const annotations = vm.metadata.annotations;
+
+      const desired = {};
+
+      this.networkRows.forEach((row) => {
+        if (row.name && row.staticIp) {
+          desired[`${ staticIpPrefix }${ row.name }`] = row.staticIp;
+        }
+      });
+
+      const current = {};
+
+      Object.keys(annotations).forEach((key) => {
+        if (key.startsWith(staticIpPrefix)) {
+          current[key] = annotations[key];
+        }
+      });
+
+      // Skip mutation when already in sync to avoid triggering a reactive update loop.
+      const desiredKeys = Object.keys(desired);
+      const currentKeys = Object.keys(current);
+      const isSame = desiredKeys.length === currentKeys.length &&
+        desiredKeys.every((key) => current[key] === desired[key]);
+
+      if (isSame) {
+        return;
+      }
+
+      currentKeys.forEach((key) => {
+        delete annotations[key];
+      });
+
+      Object.entries(desired).forEach(([key, value]) => {
+        annotations[key] = value;
+      });
     },
 
     setCPUAndMemory() {
@@ -701,65 +859,124 @@ export default {
       }
     },
 
+    needVolumeRelatedInfo(R) {
+      // return [needVolume, needVolumeClaimTemplate]
+      if (R.source === SOURCE_TYPE.CONTAINER) {
+        return [true, false];
+      }
+
+      if (R.source === SOURCE_TYPE.IMAGE && R.image === EMPTY_IMAGE) {
+        return [false, false];
+      }
+
+      return [true, true];
+    },
+
     parseDiskRows(disk) {
       const disks = [];
       const volumes = [];
-      const diskNameLabels = [];
       const volumeClaimTemplates = [];
 
       disk.forEach( (R, index) => {
-        const prefixName = this.value.metadata?.name || '';
-        const dataVolumeName = this.parseDataVolumeName(R, prefixName);
-
         const _disk = this.parseDisk(R, index);
-        const _volume = this.parseVolume(R, dataVolumeName);
-        const _dataVolumeTemplate = this.parseVolumeClaimTemplate(R, dataVolumeName);
 
         disks.push(_disk);
-        volumes.push(_volume);
-        diskNameLabels.push(dataVolumeName);
 
-        if (R.source !== SOURCE_TYPE.CONTAINER) {
+        const prefixName = this.value.metadata?.name || '';
+        const dataVolumeName = this.parseDataVolumeName(R, prefixName);
+        const [needVolume, needVolumeClaimTemplate] = this.needVolumeRelatedInfo(R);
+
+        if (needVolume) {
+          const _volume = this.parseVolume(R, dataVolumeName);
+
+          volumes.push(_volume);
+        }
+        if (needVolumeClaimTemplate) {
+          const _dataVolumeTemplate = this.parseVolumeClaimTemplate(R, dataVolumeName);
+
           volumeClaimTemplates.push(_dataVolumeTemplate);
         }
       });
 
-      if (this.needNewSecret || !this.secretName) {
+      // Regenerate the cloud-init secret name whenever it hasn't been generated yet, or the VM
+      // name has changed since it was last generated (e.g. a previous create attempt failed with
+      // an invalid/duplicate name and the user corrected it). Without this, a stale secret name
+      // derived from a rejected attempt gets reused for the VM that's actually created.
+      // See harvester/harvester#11174.
+      if (this.needNewSecret || !this.secretName || (this.isCreate && this.secretNamePrefixUsed !== this.secretNamePrefix)) {
         this.secretName = this.generateSecretName(this.secretNamePrefix);
+        this.secretNamePrefixUsed = this.secretNamePrefix;
       }
 
-      if (!disks.find( (D) => D.name === 'cloudinitdisk') && (this.userData || this.networkData)) {
-        if (!this.isWindows) {
+      if (!disks.find((D) => D.name === 'sysprep') && this.isWindows) {
+        const hasSysprepContent = !!this.sysprep.xmlContent?.trim?.();
+
+        // If we have content but no secret name, it's a new secret that needs a name. Also
+        // regenerate when creating a VM if the name prefix has changed since it was last
+        // generated.
+        const sysprepNeedsNewSecretName = !this.sysprep.secretName?.trim?.() ||
+          (this.isCreate && this.sysprepSecretNamePrefixUsed !== '' && this.sysprepSecretNamePrefixUsed !== this.secretNamePrefix);
+
+        if (hasSysprepContent && sysprepNeedsNewSecretName) {
+          const prefix = this.secretNamePrefix ? `${ this.secretNamePrefix }-windows-sysprep` : 'windows-sysprep';
+
+          this.sysprep.secretName = `${ this.value.metadata.namespace }/${ this.generateSecretName(prefix) }`;
+          this.sysprepSecretNamePrefixUsed = this.secretNamePrefix;
+        }
+
+        // Preserve/attach sysprep whenever a secret is selected/known.
+        if (this.sysprep.secretName) {
           disks.push({
-            name: 'cloudinitdisk',
-            disk: { bus: 'virtio' }
+            name:  'sysprep',
+            cdrom: { bus: 'sata' }
           });
 
-          const userData = this.getUserData({ osType: this.osType, installAgent: this.installAgent });
+          const secretName = this.sysprep.secretName.split('/')[1] || this.sysprep.secretName;
 
-          const cloudinitdisk = {
-            name:             'cloudinitdisk',
-            cloudInitNoCloud: {}
-          };
-
-          if (this.saveUserDataAsClearText) {
-            cloudinitdisk.cloudInitNoCloud.userData = userData;
-          } else {
-            cloudinitdisk.cloudInitNoCloud.secretRef = { name: this.secretName };
-          }
-
-          if (this.saveNetworkDataAsClearText) {
-            cloudinitdisk.cloudInitNoCloud.networkData = this.networkScript;
-          } else {
-            cloudinitdisk.cloudInitNoCloud.networkDataSecretRef = { name: this.secretName };
-          }
-
-          volumes.push(cloudinitdisk);
+          volumes.push({
+            name:    'sysprep',
+            sysprep: { secret: { name: secretName } }
+          });
         }
+      }
+
+      if (!disks.find( (D) => D.name === 'cloudinitdisk') && (this.userData || this.networkScript)) {
+        disks.push({
+          name: 'cloudinitdisk',
+          disk: { bus: 'virtio' }
+        });
+
+        const userData = this.getUserData({ osType: this.osType, installAgent: this.installAgent });
+        const cloudinitdisk = {
+          name:             'cloudinitdisk',
+          cloudInitNoCloud: {}
+        };
+
+        if (this.saveUserDataAsClearText) {
+          cloudinitdisk.cloudInitNoCloud.userData = userData;
+        } else {
+          cloudinitdisk.cloudInitNoCloud.secretRef = { name: this.secretName };
+        }
+
+        if (this.saveNetworkDataAsClearText) {
+          cloudinitdisk.cloudInitNoCloud.networkData = this.networkScript;
+        } else {
+          cloudinitdisk.cloudInitNoCloud.networkDataSecretRef = { name: this.secretName };
+        }
+
+        volumes.push(cloudinitdisk);
       }
 
       const specDisks = this.spec?.template?.spec?.domain?.devices?.disks;
       const mergedDisks = this.mergeDeviceList(specDisks, disks);
+
+      // `shareable` is an attachment-level opt-in, remove the field
+      // inherited from the old spec when the disk row no longer requests it
+      mergedDisks.forEach((disk) => {
+        if (disk.shareable && !disks.find((D) => D.name === disk.name)?.shareable) {
+          delete disk.shareable;
+        }
+      });
 
       let spec = {
         ...this.spec,
@@ -885,14 +1102,22 @@ export default {
       const specInterfaces = this.spec?.template?.spec?.domain?.devices?.interfaces;
       const mergedInterfaces = this.mergeInterfaceList(specInterfaces, interfaces);
 
+      const devices = {
+        ...this.spec.template.spec.domain.devices,
+        interfaces: mergedInterfaces,
+      };
+
+      if (this.isEdit && networkRow.length === 0) {
+        devices.autoattachPodInterface = false;
+      } else {
+        delete devices.autoattachPodInterface;
+      }
+
       const spec = {
         ...this.spec.template.spec,
         domain: {
           ...this.spec.template.spec.domain,
-          devices: {
-            ...this.spec.template.spec.domain.devices,
-            interfaces: mergedInterfaces,
-          },
+          devices,
         },
         networks
       };
@@ -949,6 +1174,16 @@ export default {
     },
 
     getInitUserData(config) {
+      // Windows guests don't use qemu-guest-agent via systemd (VMDP installs
+      // the QGA as a Windows service), and the Linux `runcmd` recipe would
+      // fail on Cloudbase-Init. Return an empty string so `this.userData`
+      // stays falsy on Windows until the user actually enters cloud-config
+      // content — this prevents emitting a spurious cloudinitdisk volume
+      // and Secret for every Windows VM (Copilot review comment on #984).
+      if (config.osType === 'windows') {
+        return '';
+      }
+
       const _QGA_JSON = this.getMatchQGA(config.osType);
 
       const out = jsyaml.dump(_QGA_JSON);
@@ -976,9 +1211,10 @@ export default {
 
         userDataDoc = config.installAgent ? this.mergeQGA({ userDataDoc, ...config }) : this.deleteQGA({ userDataDoc, ...config });
         const userDataYaml = userDataDoc.toString();
+        const userDataValue = userDataDoc.toJSON();
 
-        if (userDataYaml === '{}\n') {
-          // When the YAML parsed value is '{}\n', it means that the userData is empty, then undefined is returned.
+        if (userDataValue === null || (typeof userDataValue === 'object' && !Array.isArray(userDataValue) && isEmpty(userDataValue))) {
+          // Empty userData should not create cloud-init content like `null`.
           return undefined;
         }
 
@@ -1025,6 +1261,10 @@ export default {
         out.disk = { bus: R.bus };
       } else if (R.type === CD_ROM) {
         out.cdrom = { bus: R.bus };
+      }
+
+      if (R.shareable) {
+        out.shareable = true;
       }
 
       out.bootOrder = index + 1;
@@ -1077,8 +1317,9 @@ export default {
       case SOURCE_TYPE.IMAGE: {
         const image = this.images.find( (I) => R.image === I.id);
 
+        out.spec.storageClassName = R.realName ? R.storageClassName : (R.storageClassName || image?.storageClassName);
+
         if (image) {
-          out.spec.storageClassName = image.storageClassName;
           out.metadata.annotations = { [HCI_ANNOTATIONS.IMAGE_ID]: image.id };
         } else {
           out.metadata.annotations = { [HCI_ANNOTATIONS.IMAGE_ID]: '' };
@@ -1151,13 +1392,22 @@ export default {
      */
     deleteYamlDocProp(doc, paths) {
       try {
-        const item = doc.getIn([])?.items[0];
-        const key = item?.key;
-        const hasCloudConfigComment = !!key?.commentBefore?.includes('cloud-config');
-        const isMatchProp = key.source === paths[paths.length - 1];
+        const items = doc.getIn([])?.items;
+        const firstKey = items?.[0]?.key;
+        const hasCloudConfigComment = !!firstKey?.commentBefore?.includes('cloud-config');
+        const isFirstProp = firstKey?.source === paths[paths.length - 1];
 
-        if (key && hasCloudConfigComment && isMatchProp) {
-          // Comments are mounted on the next node and we should not delete the node containing cloud-config
+        if (firstKey && hasCloudConfigComment && isFirstProp) {
+          const comment = firstKey.commentBefore;
+
+          doc.deleteIn(paths);
+
+          // Move the comment to the new first key; if no keys remain the comment is lost.
+          const newFirstKey = doc.getIn([])?.items?.[0]?.key;
+
+          if (newFirstKey) {
+            newFirstKey.commentBefore = comment;
+          }
         } else {
           doc.deleteIn(paths);
         }
@@ -1208,7 +1458,6 @@ export default {
       if (packages.length > 0) {
         userDataDoc.setIn(['packages'], packages);
       } else {
-        userDataDoc.setIn(['packages'], []); // It needs to be set empty first, as it is possible that cloud-init comments are mounted on this node
         this.deleteYamlDocProp(userDataDoc, ['packages']);
         this.deleteYamlDocProp(userDataDoc, ['package_update']);
       }
@@ -1223,7 +1472,7 @@ export default {
     },
 
     deleteQGA(config) {
-      const { osType, userDataDoc, deletePackage = false } = config;
+      const { osType, userDataDoc } = config;
 
       const userDataTemplateValue = this.$store.getters['harvester/byId'](CONFIG_MAP, this.userDataTemplateId)?.data?.cloudInit || '';
 
@@ -1231,6 +1480,15 @@ export default {
       const userDataJSON = YAML.parse(userDataYAML);
       const packages = userDataJSON?.packages || [];
       const runcmd = userDataJSON?.runcmd || [];
+
+      // Special handling of OS types.
+      let deletePackage = config.deletePackage ?? false;
+
+      switch (osType) {
+      case 'windows':
+        deletePackage = true;
+        break;
+      }
 
       if (Array.isArray(packages) && deletePackage) {
         const templateHasQGAPackage = this.convertToJson(userDataTemplateValue);
@@ -1257,7 +1515,6 @@ export default {
       if (packages.length > 0) {
         userDataDoc.setIn(['packages'], packages);
       } else {
-        userDataDoc.setIn(['packages'], []);
         this.deleteYamlDocProp(userDataDoc, ['packages']);
         this.deleteYamlDocProp(userDataDoc, ['package_update']);
       }
@@ -1290,7 +1547,7 @@ export default {
     },
 
     async saveSecret(vm) {
-      if (!vm?.spec || !this.secretName || this.isWindows) {
+      if (!vm?.spec || !this.secretName) {
         return true;
       }
 
@@ -1372,6 +1629,42 @@ export default {
       } catch (e) {
         return Promise.reject(e);
       }
+    },
+
+    async saveSysprepConfig(vm) {
+      if (!this.isWindows) {
+        return;
+      }
+
+      if (!this.sysprep.secretName?.trim?.() && !this.sysprep.xmlContent?.trim?.()) {
+        return;
+      }
+
+      const secretName = this.sysprep.secretName.split('/')[1] || this.sysprep.secretName;
+      const namespace = vm.metadata.namespace;
+      const namespacedName = `${ namespace }/${ secretName }`;
+
+      let secret;
+
+      try {
+        secret = await this.$store.dispatch('harvester/find', { type: SECRET, id: namespacedName });
+      } catch (e) {
+        if (e?.status !== 404) {
+          throw e;
+        }
+
+        secret = await this.$store.dispatch('harvester/create', {
+          type:     SECRET,
+          metadata: {
+            name:      secretName,
+            namespace,
+            labels:    { [HCI_ANNOTATIONS.WINDOWS_SYSPREP]: 'true' },
+          },
+        });
+      }
+
+      secret.setData('autounattend.xml', this.sysprep.xmlContent);
+      await secret.save();
     },
 
     getAccessCredentialsValidation() {
@@ -1577,7 +1870,18 @@ export default {
         const specDevice = specDeviceMap.get(device.name);
 
         if (specDevice) {
-          return { ...specDevice, ...device };
+          const merged = { ...specDevice, ...device };
+
+          // A disk entry must be either `disk` or `cdrom`, never both.
+          const type = device?.cdrom ? CD_ROM : device?.disk ? HARD_DISK : '';
+
+          if (type === CD_ROM) {
+            delete merged.disk;
+          } else if (type === HARD_DISK) {
+            delete merged.cdrom;
+          }
+
+          return merged;
         }
 
         return device;
@@ -1625,6 +1929,15 @@ export default {
   },
 
   watch: {
+    networkRows: {
+      handler() {
+        const vm = this.resourceType === HCI.VM ? this.value : this.value?.spec?.vm;
+
+        this.syncStaticIpAnnotations(vm);
+      },
+      deep: true
+    },
+
     diskRows: {
       handler(neu, old) {
         if (Array.isArray(neu)) {
@@ -1634,7 +1947,7 @@ export default {
 
           const oldImageId = old[0]?.image;
 
-          if (this.isCreate && oldImageId === imageId && imageId) {
+          if (this.isCreate && oldImageId !== imageId && imageId && osType) {
             this.osType = osType;
           }
         }
@@ -1655,8 +1968,6 @@ export default {
     isWindows(val) {
       if (val) {
         this['sshKey'] = [];
-        this['userScript'] = undefined;
-        this['networkScript'] = undefined;
         this['installAgent'] = false;
       }
     },
@@ -1716,9 +2027,8 @@ export default {
 
     osType(neu, old) {
       this.installAgent = old === 'windows' ? true : this.installAgent;
-      const out = old === 'windows' ? this.getInitUserData({ osType: neu }) : this.getUserData({ installAgent: this.installAgent, osType: neu });
+      this.userScript = this.getUserData({ installAgent: this.installAgent, osType: neu });
 
-      this['userScript'] = out;
       this.refreshYamlEditor();
     },
 

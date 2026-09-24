@@ -3,7 +3,6 @@ import { Banner } from '@components/Banner';
 import Loading from '@shell/components/Loading';
 import ResourceTable from '@shell/components/ResourceTable';
 import BadgeState from '@shell/components/formatter/BadgeStateFormatter';
-
 import { NAME, AGE, NAMESPACE, STATE } from '@shell/config/table-headers';
 import { NETWORK_ATTACHMENT, SCHEMA } from '@shell/config/types';
 import { allHash } from '@shell/utils/promise';
@@ -113,6 +112,7 @@ export default {
           value:         'connectivity',
           labelKey:      'tableHeaders.routeConnectivity',
           formatter:     'NetworkRouteConnectivity',
+          tooltip:       'harvester.tableHeaders.routeConnectivityTooltip',
           formatterOpts: { arbitrary: true },
           width:         130,
         },
@@ -166,6 +166,7 @@ export default {
       :schema="schema"
       :groupable="true"
       :rows="filterRows"
+      :ignore-filter="true"
       key-field="_key"
     >
       <template #cell:state="{row}">

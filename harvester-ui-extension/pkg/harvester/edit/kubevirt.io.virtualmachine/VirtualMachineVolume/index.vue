@@ -13,11 +13,14 @@ import { ucFirst, randomStr } from '@shell/utils/string';
 import { removeObject } from '@shell/utils/array';
 import { _VIEW, _EDIT, _CREATE } from '@shell/config/query-params';
 import { PLUGIN_DEVELOPER, DEV } from '@shell/store/prefs';
-import { SOURCE_TYPE } from '../../../config/harvester-map';
+import { VOLUME_HOTPLUG_ACTION, SOURCE_TYPE } from '../../../config/harvester-map';
 import { PRODUCT_NAME as HARVESTER_PRODUCT } from '../../../config/harvester';
 import { HCI } from '../../../types';
-import { VOLUME_MODE } from '@pkg/harvester/config/types';
+import { VOLUME_MODE, ACCESS_MODE } from '@pkg/harvester/config/types';
 import { OFF } from '../../../models/kubevirt.io.virtualmachine';
+import { EMPTY_IMAGE } from '../../../utils/vm';
+
+const { READ_WRITE_MANY } = ACCESS_MODE;
 
 export default {
   emits: ['update:value'],
@@ -68,7 +71,7 @@ export default {
 
     customAccessMode: {
       type:    String,
-      default: 'ReadWriteMany'
+      default: READ_WRITE_MANY
     },
 
     resourceType: {
@@ -117,6 +120,10 @@ export default {
       return this.mode === _CREATE;
     },
 
+    isHotplugCdRomFeatureEnabled() {
+      return this.$store.getters['harvester-common/getFeatureEnabled']('hotplugCdRom');
+    },
+
     defaultStorageClass() {
       const defaultStorage = this.$store.getters['harvester/all'](STORAGE_CLASS).find((sc) => sc.isDefault);
 
@@ -146,7 +153,7 @@ export default {
     value: {
       handler(neu) {
         const rows = clone(neu).map((V) => {
-          if (!this.isCreate && V.source !== SOURCE_TYPE.CONTAINER && !V.newCreateId) {
+          if (!this.isCreate && V.source !== SOURCE_TYPE.CONTAINER && !V.newCreateId && V.image !== EMPTY_IMAGE) {
             V.to = {
               name:   `${ HARVESTER_PRODUCT }-c-cluster-resource-namespace-id`,
               params: {
@@ -217,8 +224,48 @@ export default {
       }
     },
 
-    unplugVolume(volume) {
-      this.vm.unplugVolume(volume.name);
+    canDoVolumeHotplugAction(volume) {
+      if (!this.isHotplugCdRomFeatureEnabled && volume.type === 'cd-rom') {
+        return false;
+      }
+
+      if (volume.hotpluggable) {
+        return true;
+      }
+
+      return volume.type === 'cd-rom' && volume.bus === 'sata' && volume.image === EMPTY_IMAGE;
+    },
+
+    getVolumeHotplugAction(volume) {
+      if (volume.type === 'cd-rom' && volume.bus === 'sata') {
+        if (volume.image === EMPTY_IMAGE) {
+          return VOLUME_HOTPLUG_ACTION.INSERT_CDROM_IMAGE;
+        }
+
+        return VOLUME_HOTPLUG_ACTION.EJECT_CDROM_IMAGE;
+      }
+
+      return VOLUME_HOTPLUG_ACTION.DETACH_DISK;
+    },
+
+    getVolumeHotplugActionLabel(volume) {
+      const labels = {
+        [VOLUME_HOTPLUG_ACTION.DETACH_DISK]:        'harvester.virtualMachine.hotUnplug.detachVolume.actionLabel',
+        [VOLUME_HOTPLUG_ACTION.INSERT_CDROM_IMAGE]: 'harvester.modal.insertCdRomVolume.actionLabel',
+        [VOLUME_HOTPLUG_ACTION.EJECT_CDROM_IMAGE]:  'harvester.virtualMachine.hotUnplug.ejectCdRomVolume.actionLabel',
+      };
+
+      return labels[this.getVolumeHotplugAction(volume)];
+    },
+
+    hotplugVolume(volume) {
+      const calls = {
+        [VOLUME_HOTPLUG_ACTION.DETACH_DISK]:        () => this.vm.unplugVolume(volume.name),
+        [VOLUME_HOTPLUG_ACTION.INSERT_CDROM_IMAGE]: () => this.vm.insertCdRomVolume(volume.name),
+        [VOLUME_HOTPLUG_ACTION.EJECT_CDROM_IMAGE]:  () => this.vm.ejectCdRomVolume(volume.name),
+      };
+
+      return calls[this.getVolumeHotplugAction(volume)]();
     },
 
     componentFor(type) {
@@ -346,12 +393,12 @@ export default {
               <i class="icon icon-x" />
             </button>
             <button
-              v-if="volume.hotpluggable && isView"
+              v-if="canDoVolumeHotplugAction(volume) && isView"
               type="button"
               class="role-link btn btn-sm remove"
-              @click="unplugVolume(volume)"
+              @click="hotplugVolume(volume)"
             >
-              {{ t('harvester.virtualMachine.hotUnplug.detachVolume.actionLabel') }}
+              {{ t(getVolumeHotplugActionLabel(volume)) }}
             </button>
           </div>
           <div>
@@ -430,7 +477,6 @@ export default {
       <button
         type="button"
         class="btn btn-sm bg-primary mr-15 mb-10"
-        :disabled="rows.length === 0"
         @click="addVolume(SOURCE_TYPE.NEW)"
       >
         {{ t('harvester.virtualMachine.volume.addVolume') }}

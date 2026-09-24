@@ -54,12 +54,33 @@ const FEATURE_FLAGS = {
     'lhV2VolExpansion',
     'l2VlanTrunkMode',
     'kubevirtMigration',
-    'hotplugNic'
+    'hotplugNic',
+    'resumeUpgradePausedNode',
   ],
   'v1.7.1': [],
-  'v1.7.2': [
-    'clusterRegistrationTLSVerify'
+  'v1.8.0': [
+    'hotplugCdRom',
+    'supportBundleFileNameSetting',
+    'clusterRegistrationTLSVerify',
+    'vGPUAsPCIDevice',
+    'instanceManagerResourcesSetting',
+    'rwxNetworkSetting',
+    'createPVCWithDataVolume',
+    'clusterPodSecurityStandardSetting',
   ],
+  'v1.8.1': [],
+  'v1.9.0': [
+    'supportFilesystem',
+    'disableResourcePooling',
+    'expandOnlineEncryptedVolume',
+    'longhornV2HugepageSettings',
+    'staticIPForVM',
+    'fsFreezeDeadline',
+  ],
+  'v1.9.1': [
+    'lvmDmThinOnly',
+  ],
+  'v1.10.0': [],
 };
 
 const generateFeatureFlags = () => {

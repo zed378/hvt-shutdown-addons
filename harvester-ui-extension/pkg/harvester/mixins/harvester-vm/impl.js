@@ -38,6 +38,10 @@ export const SSH_EXISTING_TYPE = {
 export default {
   methods: {
     hasCloudConfigComment(userScript) {
+      if (typeof userScript === 'string' && /^\s*#cloud-config(\s|$)/.test(userScript)) {
+        return true;
+      }
+
       // Check that userData contains: #cloud-config
       const userDataDoc = userScript ? YAML.parseDocument(userScript) : YAML.parseDocument({});
       const items = userDataDoc?.contents?.items || [];
@@ -49,6 +53,14 @@ export default {
       }
 
       if (userDataDoc?.commentBefore === 'cloud-config' || userDataDoc?.commentBefore?.includes('cloud-config\n')) {
+        exist = true;
+      }
+
+      if (userDataDoc?.contents?.commentBefore === 'cloud-config' || userDataDoc?.contents?.commentBefore?.includes('cloud-config\n')) {
+        exist = true;
+      }
+
+      if (userDataDoc?.contents?.comment === 'cloud-config' || userDataDoc?.contents?.comment?.includes('cloud-config\n')) {
         exist = true;
       }
 
@@ -253,6 +265,29 @@ export default {
 
     getSSHFromUserData(userData) {
       return this.convertToJson(userData)?.ssh_authorized_keys || [];
+    },
+
+    getSysprepConfig(spec) {
+      const sysprepVolume = spec?.template?.spec?.volumes?.find(
+        (v) => v.name === 'sysprep' && v.sysprep?.secret
+      );
+
+      if (!sysprepVolume) {
+        return { secretName: '', xmlContent: '' };
+      }
+
+      const inStore = this.$store.getters['currentProduct'].inStore;
+      const namespace = this.value.metadata.namespace;
+      const secretName = sysprepVolume.sysprep.secret.name;
+      const secret = this.$store.getters[`${ inStore }/byId`](
+        SECRET,
+        `${ namespace }/${ secretName }`
+      );
+
+      return {
+        secretName: `${ namespace }/${ secretName }`,
+        xmlContent: secret?.decodedData?.['autounattend.xml'] || ''
+      };
     },
 
     compareSSHValue(a = '', b = '') {

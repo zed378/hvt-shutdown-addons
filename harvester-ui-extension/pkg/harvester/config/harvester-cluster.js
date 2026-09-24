@@ -13,7 +13,6 @@ import {
   NETWORK_POLICY
 } from '@shell/config/types';
 import { HCI, VOLUME_SNAPSHOT } from '../types';
-import { registerAddonNav } from '../utils/dynamic-nav';
 import {
   STATE,
   NAME_UNLINKED,
@@ -36,29 +35,42 @@ import {
   SNAPSHOT_TARGET_VOLUME,
   IMAGE_VIRTUAL_SIZE,
   IMAGE_STORAGE_CLASS,
-  HARVESTER_DESCRIPTION
+  HARVESTER_DESCRIPTION,
+  VM_IMPORT_SOURCE_VM,
+  VM_IMPORT_SOURCE_CLUSTER,
+  VM_IMPORT_STATUS,
+  VM_IMPORT_SOURCE_V_DC,
+  VM_IMPORT_SOURCE_V_ENDPOINT,
+  VM_IMPORT_SOURCE_V_STATUS,
+  VM_IMPORT_SOURCE_O_REGION,
+  VM_IMPORT_SOURCE_O_ENDPOINT,
+  VM_IMPORT_SOURCE_O_STATUS,
+  VM_IMPORT_SOURCE_OVA_URL,
+  VM_IMPORT_SOURCE_OVA_STATUS,
+  FORKLIFT_PROVIDER_TYPE,
+  FORKLIFT_PROVIDER_URL,
+  FORKLIFT_MAP_SOURCE_PROVIDER,
+  FORKLIFT_MAP_DEST_PROVIDER,
+  FORKLIFT_PLAN_TARGET_NS,
+  FORKLIFT_PLAN_VM_COUNT,
+  FORKLIFT_MIGRATION_PLAN,
 } from './table-headers';
+import { ADD_ONS } from './harvester-map';
+import { registerAddonSideNav } from '../utils/dynamic-nav';
+import { setVendor } from '@shell/config/private-label';
+import { createCssVars } from '@shell/utils/color';
 
 const TEMPLATE = HCI.VM_VERSION;
 const MONITORING_GROUP = 'Monitoring & Logging::Monitoring';
 const LOGGING_GROUP = 'Monitoring & Logging::Logging';
-
-// The single `vpn` add-on ships several agents; each gets a page in this group.
-const VPN_GROUP = 'vpn';
-const VPN_PROVIDERS = [
-  {
-    name: 'netbird', labelKey: 'harvester.vpn.netbird.label', weight: 4
-  },
-  {
-    name: 'tailscale', labelKey: 'harvester.vpn.tailscale.label', weight: 3
-  },
-  {
-    name: 'zerotier', labelKey: 'harvester.vpn.zerotier.label', weight: 2
-  },
-  {
-    name: 'openvpn', labelKey: 'harvester.vpn.openvpn.label', weight: 1
-  },
-];
+const OVERLAY_NETWORKS_GROUP = 'Overlay Networks';
+const UNDERLAY_NETWORKS_GROUP = 'Underlay Networks';
+const NAT_INTERNET_GROUP = `${ OVERLAY_NETWORKS_GROUP }::NAT & Internet`;
+const GATEWAYS_GROUP = `${ NAT_INTERNET_GROUP }::Gateways`;
+const EXTERNAL_IPS_GROUP = `${ NAT_INTERNET_GROUP }::External IPs`;
+const RULES_GROUP = `${ NAT_INTERNET_GROUP }::Rules`;
+const SOURCE_RULES_GROUP = `${ RULES_GROUP }::Source Rules`;
+const DESTINATION_RULES_GROUP = `${ RULES_GROUP }::Destination Rules`;
 
 export const PRODUCT_NAME = 'harvester';
 
@@ -86,7 +98,6 @@ export function init($plugin, store) {
     configureType,
     virtualType,
     weightGroup,
-    weightType,
   } = $plugin.DSL(store, PRODUCT_NAME);
 
   const isSingleVirtualCluster = process.env.rancherEnv === PRODUCT_NAME;
@@ -100,15 +111,51 @@ export function init($plugin, store) {
       }
     };
 
-    store.dispatch('setIsSingleProduct', {
-      productName:       PRODUCT_NAME,
-      logo:              require(`@shell/assets/images/providers/harvester.svg`),
-      productNameKey:    'harvester.productLabel',
-      getVersionInfo:    (store) => store.getters[`${ PRODUCT_NAME }/byId`]?.(HCI.SETTING, 'server-version')?.value || 'unknown',
-      afterLoginRoute:   home,
-      logoRoute:         home,
-      supportCustomLogo: true
-    });
+    store.watch(
+      (_state, getters) => JSON.stringify([
+        !!getters['harvester-common/isHarvesterPrime'],
+        getters['prefs/theme'] === 'dark',
+        getters['harvester-common/privateLabel']
+      ]),
+      (value) => {
+        const [isHarvesterPrime, isDark, privateLabel] = JSON.parse(value);
+        const primeLogo = isDark ? require('../assets/images/dark/suse-virtualization.svg') : require('../assets/images/suse-virtualization.svg');
+
+        setVendor(privateLabel || '');
+
+        let primaryColorStyle = document.getElementById('harvester-prime-primary-color');
+
+        // set harvester prime primary color style to #4dd192 (Cyan Green)
+        if (isHarvesterPrime) {
+          if (!primaryColorStyle) {
+            primaryColorStyle = document.createElement('style');
+            primaryColorStyle.id = 'harvester-prime-primary-color';
+            document.head.appendChild(primaryColorStyle);
+            primaryColorStyle.sheet.insertRule('body.theme-light, body.theme-dark {}', 0);
+          }
+
+          const colors = createCssVars('#4dd192', isDark ? 'dark' : 'light');
+          const rule = primaryColorStyle.sheet.cssRules[0];
+
+          Object.entries(colors).forEach(([property, color]) => rule.style.setProperty(property.trim(), color));
+        } else {
+          primaryColorStyle?.remove();
+        }
+
+        const primeLabelKey = privateLabel ? 'harvester.branding.primeLabel' : 'harvester.branding.primeEmptyLabel';
+
+        store.dispatch('setIsSingleProduct', {
+          productName:       PRODUCT_NAME,
+          logo:              isHarvesterPrime ? primeLogo : require(`@shell/assets/images/providers/harvester.svg`),
+          productNameKey:    isHarvesterPrime ? primeLabelKey : 'harvester.productLabel',
+          getVersionInfo:    (store) => store.getters[`${ PRODUCT_NAME }/byId`]?.(HCI.SETTING, 'server-version')?.value || 'unknown',
+          afterLoginRoute:   home,
+          logoRoute:         home,
+          supportCustomLogo: !isHarvesterPrime
+        });
+      },
+      { immediate: true }
+    );
   }
 
   product({
@@ -173,7 +220,7 @@ export function init($plugin, store) {
     group:      'Root',
     name:       HCI.HOST,
     namespaced: true,
-    weight:     399,
+    weight:     499,
     route:      {
       name:   `${ PRODUCT_NAME }-c-cluster-resource`,
       params: { resource: HCI.HOST }
@@ -198,51 +245,6 @@ export function init($plugin, store) {
     }
   });
 
-  // node-shutdown add-on token console — custom page in the "Advanced" nav group.
-  // The virtualType/route are always registered so the page exists, but the nav
-  // entry (basicType) is toggled by registerAddonNav below based on whether the
-  // node-shutdown add-on is enabled — so the menu disappears when the add-on is off.
-  virtualType({
-    labelKey:   'harvester.nodeShutdown.label',
-    group:      'advanced',
-    namespaced: false,
-    name:       'node-shutdown',
-    weight:     -99,
-    icon:       'gear',
-    route:      { name: `${ PRODUCT_NAME }-c-cluster-node-shutdown` },
-    exact:      true,
-  });
-  registerAddonNav(store, PRODUCT_NAME, {
-    addonName:    'node-shutdown',
-    resourceType: HCI.ADD_ONS,
-    navGroup:     'advanced',
-    types:        ['node-shutdown'],
-  });
-
-  // vpn add-on — ONE add-on providing several VPN agents, each with its own page
-  // in a dedicated "VPN" nav group. The whole group is gated on that single add-on
-  // being enabled, so all four entries appear/disappear together (which provider
-  // actually deploys is then a per-provider toggle on its page).
-  VPN_PROVIDERS.forEach(({ name, labelKey, weight }) => {
-    virtualType({
-      labelKey,
-      group:      VPN_GROUP,
-      namespaced: false,
-      name,
-      weight,
-      icon:       'globe',
-      route:      { name: `${ PRODUCT_NAME }-c-cluster-vpn-${ name }` },
-      exact:      true,
-    });
-  });
-  registerAddonNav(store, PRODUCT_NAME, {
-    addonName:    'vpn',
-    resourceType: HCI.ADD_ONS,
-    navGroup:     VPN_GROUP,
-    types:        VPN_PROVIDERS.map((p) => p.name),
-  });
-  weightGroup(VPN_GROUP, 250, true);
-
   basicType([HCI.VM]);
   configureType(HCI.VM, { canYaml: false });
   virtualType({
@@ -250,13 +252,153 @@ export function init($plugin, store) {
     group:      'root',
     name:       HCI.VM,
     namespaced: true,
-    weight:     299,
+    weight:     498,
     route:      {
       name:   `${ PRODUCT_NAME }-c-cluster-resource`,
       params: { resource: HCI.VM }
     },
     exact: false
   });
+
+  // ===========================================================================
+  // VM Import Controller UI Flow
+  // ===========================================================================
+  // Define group (Hidden by default)
+  weightGroup('vmimport', 0, false);
+
+  // VirtualMachineImport
+  headers(HCI.VMIMPORT, [
+    STATE,
+    NAME_COL,
+    NAMESPACE_COL,
+    VM_IMPORT_SOURCE_VM,
+    VM_IMPORT_SOURCE_CLUSTER,
+    VM_IMPORT_STATUS,
+    AGE
+  ]);
+  configureType(HCI.VMIMPORT, {
+    resource:       HCI.VMIMPORT,
+    resourceDetail: HCI.VMIMPORT,
+    resourceEdit:   HCI.VMIMPORT,
+    location:       {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.VMIMPORT }
+    }
+  });
+  virtualType({ // needed to avoid 404 on refresh when combined with registerAddonSideNav()
+    name:       HCI.VMIMPORT,
+    labelKey:   'harvester.addons.vmImport.labels.vmimport',
+    group:      'vmimport',
+    namespaced: true,
+    ifHaveType: HCI.VMIMPORT,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.VMIMPORT }
+    }
+  });
+
+  // Source: VMware
+  headers(HCI.VMIMPORT_SOURCE_V, [
+    STATE,
+    NAME_COL,
+    VM_IMPORT_SOURCE_V_ENDPOINT,
+    VM_IMPORT_SOURCE_V_DC,
+    VM_IMPORT_SOURCE_V_STATUS,
+    AGE
+  ]);
+  configureType(HCI.VMIMPORT_SOURCE_V, {
+    resource:       HCI.VMIMPORT_SOURCE_V,
+    resourceDetail: HCI.VMIMPORT_SOURCE_V,
+    resourceEdit:   HCI.VMIMPORT_SOURCE_V,
+    location:       {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.VMIMPORT_SOURCE_V }
+    }
+  });
+  virtualType({ // needed to avoid 404 on refresh when combined with registerAddonSideNav()
+    name:       HCI.VMIMPORT_SOURCE_V,
+    labelKey:   'harvester.addons.vmImport.labels.vmimportSourceVMWare',
+    group:      'vmimport',
+    namespaced: true,
+    ifHaveType: HCI.VMIMPORT_SOURCE_V,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.VMIMPORT_SOURCE_V }
+    }
+  });
+
+  // Source: OpenStack
+  headers(HCI.VMIMPORT_SOURCE_O, [
+    STATE,
+    NAME_COL,
+    VM_IMPORT_SOURCE_O_ENDPOINT,
+    VM_IMPORT_SOURCE_O_REGION,
+    VM_IMPORT_SOURCE_O_STATUS,
+    AGE
+  ]);
+  configureType(HCI.VMIMPORT_SOURCE_O, {
+    resource:       HCI.VMIMPORT_SOURCE_O,
+    resourceDetail: HCI.VMIMPORT_SOURCE_O,
+    resourceEdit:   HCI.VMIMPORT_SOURCE_O,
+    location:       {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.VMIMPORT_SOURCE_O }
+    }
+  });
+  virtualType({ // needed to avoid 404 on refresh when combined with registerAddonSideNav()
+    name:       HCI.VMIMPORT_SOURCE_O,
+    labelKey:   'harvester.addons.vmImport.labels.vmimportSourceOpenStack',
+    group:      'vmimport',
+    namespaced: true,
+    ifHaveType: HCI.VMIMPORT_SOURCE_O,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.VMIMPORT_SOURCE_O }
+    }
+  });
+
+  // Source: OVA
+  headers(HCI.VMIMPORT_SOURCE_OVA, [
+    STATE,
+    NAME_COL,
+    VM_IMPORT_SOURCE_OVA_URL,
+    VM_IMPORT_SOURCE_OVA_STATUS,
+    AGE
+  ]);
+  configureType(HCI.VMIMPORT_SOURCE_OVA, {
+    resource:       HCI.VMIMPORT_SOURCE_OVA,
+    resourceDetail: HCI.VMIMPORT_SOURCE_OVA,
+    resourceEdit:   HCI.VMIMPORT_SOURCE_OVA,
+    location:       {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.VMIMPORT_SOURCE_OVA }
+    }
+  });
+  virtualType({ // needed to avoid 404 on refresh when combined with registerAddonSideNav()
+    name:       HCI.VMIMPORT_SOURCE_OVA,
+    labelKey:   'harvester.addons.vmImport.labels.vmimportSourceOVA',
+    group:      'vmimport',
+    namespaced: true,
+    ifHaveType: HCI.VMIMPORT_SOURCE_OVA,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.VMIMPORT_SOURCE_OVA }
+    }
+  });
+
+  // Enable SideNav based on Addon Status
+  registerAddonSideNav(store, PRODUCT_NAME, {
+    addonName:    ADD_ONS.VM_IMPORT_CONTROLLER,
+    resourceType: HCI.ADD_ONS,
+    navGroup:     'vmimport',
+    types:        [
+      HCI.VMIMPORT_SOURCE_V,
+      HCI.VMIMPORT_SOURCE_O,
+      HCI.VMIMPORT_SOURCE_OVA,
+      HCI.VMIMPORT
+    ]
+  });
+  // ===========================================================================
 
   basicType([HCI.VOLUME]);
   configureType(HCI.VOLUME, {
@@ -275,7 +417,7 @@ export function init($plugin, store) {
     ifHaveType: PVC,
     name:       HCI.VOLUME,
     namespaced: true,
-    weight:     199,
+    weight:     497,
     route:      {
       name:   `${ PRODUCT_NAME }-c-cluster-resource`,
       params: { resource: HCI.VOLUME }
@@ -301,7 +443,7 @@ export function init($plugin, store) {
     group:      'root',
     name:       HCI.IMAGE,
     namespaced: true,
-    weight:     198,
+    weight:     496,
     route:      {
       name:   `${ PRODUCT_NAME }-c-cluster-resource`,
       params: { resource: HCI.IMAGE }
@@ -316,7 +458,7 @@ export function init($plugin, store) {
     group:      'root',
     namespaced: true,
     name:       'projects-namespaces',
-    weight:     98,
+    weight:     495,
     route:      { name: `${ PRODUCT_NAME }-c-cluster-projectsnamespaces` },
     exact:      true,
   });
@@ -328,7 +470,7 @@ export function init($plugin, store) {
       labelKey:   'harvester.namespace.label',
       name:       NAMESPACE,
       namespaced: true,
-      weight:     89,
+      weight:     495,
       route:      {
         name:   `${ PRODUCT_NAME }-c-cluster-resource`,
         params: { resource: NAMESPACE }
@@ -399,6 +541,7 @@ export function init($plugin, store) {
   });
 
   virtualType({
+    ifHaveType: LOGGING.CLUSTER_FLOW,
     labelKey:   'harvester.logging.clusterFlow.label',
     name:       HCI.CLUSTER_FLOW,
     namespaced: true,
@@ -422,6 +565,7 @@ export function init($plugin, store) {
   });
 
   virtualType({
+    ifHaveType: LOGGING.CLUSTER_OUTPUT,
     labelKey:   'harvester.logging.clusterOutput.label',
     name:       HCI.CLUSTER_OUTPUT,
     namespaced: true,
@@ -445,6 +589,7 @@ export function init($plugin, store) {
   });
 
   virtualType({
+    ifHaveType: LOGGING.FLOW,
     labelKey:   'harvester.logging.flow.label',
     name:       HCI.FLOW,
     namespaced: true,
@@ -468,6 +613,7 @@ export function init($plugin, store) {
   });
 
   virtualType({
+    ifHaveType: LOGGING.OUTPUT,
     labelKey:   'harvester.logging.output.label',
     name:       HCI.OUTPUT,
     namespaced: true,
@@ -488,12 +634,51 @@ export function init($plugin, store) {
     [
       HCI.CLUSTER_NETWORK,
       HCI.NETWORK_ATTACHMENT,
-      HCI.VPC,
-      NETWORK_POLICY,
+      HCI.HOST_NETWORK_CONFIG,
       HCI.LB,
       HCI.IP_POOL,
     ],
     'networks'
+  );
+
+  basicType(
+    [HCI.VPC],
+    OVERLAY_NETWORKS_GROUP
+  );
+
+  basicType(
+    [NETWORK_POLICY],
+    OVERLAY_NETWORKS_GROUP
+  );
+
+  basicType(
+    [HCI.VPC_NAT_GATEWAY],
+    GATEWAYS_GROUP
+  );
+
+  basicType(
+    [HCI.IPTABLES_EIP],
+    EXTERNAL_IPS_GROUP
+  );
+
+  basicType(
+    [HCI.IPTABLES_SNAT_RULE],
+    SOURCE_RULES_GROUP
+  );
+
+  basicType(
+    [HCI.IPTABLES_DNAT_RULE],
+    DESTINATION_RULES_GROUP
+  );
+
+  basicType(
+    [HCI.PROVIDER_NETWORK],
+    UNDERLAY_NETWORKS_GROUP
+  );
+
+  basicType(
+    [HCI.VLAN],
+    UNDERLAY_NETWORKS_GROUP
   );
 
   basicType(
@@ -506,9 +691,12 @@ export function init($plugin, store) {
     'backupAndSnapshot'
   );
 
-  weightGroup('networks', 300, true);
-  weightType(NAMESPACE, 299, true);
-  weightGroup('backupAndSnapshot', 289, true);
+  weightGroup('networks', 494, true);
+  weightGroup('Overlay Networks', 493, true);
+  weightGroup('NAT & Internet', 492, true);
+  weightGroup('Rules', 491, true);
+  weightGroup('Underlay Networks', 490, true);
+  weightGroup('backupAndSnapshot', 489, true);
 
   basicType(
     [
@@ -587,7 +775,7 @@ export function init($plugin, store) {
     name:       HCI.CLUSTER_NETWORK,
     ifHaveType: HCI.CLUSTER_NETWORK,
     namespaced: false,
-    weight:     189,
+    weight:     484,
     route:      {
       name:   `${ PRODUCT_NAME }-c-cluster-resource`,
       params: { resource: HCI.CLUSTER_NETWORK }
@@ -602,14 +790,14 @@ export function init($plugin, store) {
     },
     resource:       NETWORK_ATTACHMENT,
     resourceDetail: HCI.NETWORK_ATTACHMENT,
-    resourceEdit:   HCI.NETWORK_ATTACHMENT
+    resourceEdit:   HCI.NETWORK_ATTACHMENT,
   });
 
   virtualType({
     labelKey:   'harvester.network.label',
     name:       HCI.NETWORK_ATTACHMENT,
     namespaced: true,
-    weight:     188,
+    weight:     485,
     route:      {
       name:   `${ PRODUCT_NAME }-c-cluster-resource`,
       params: { resource: HCI.NETWORK_ATTACHMENT }
@@ -623,7 +811,7 @@ export function init($plugin, store) {
     labelKey:   'harvester.vpc.label',
     name:       HCI.VPC,
     namespaced: true,
-    weight:     187,
+    weight:     195,
     route:      {
       name:   `${ PRODUCT_NAME }-c-cluster-resource`,
       params: { resource: HCI.VPC }
@@ -632,19 +820,126 @@ export function init($plugin, store) {
     ifHaveType: HCI.VPC,
   });
 
+  configureType(HCI.VPC_NAT_GATEWAY, { hiddenNamespaceGroupButton: true, canYaml: false });
+
+  virtualType({
+    labelKey:   'harvester.natGateway.label',
+    name:       HCI.VPC_NAT_GATEWAY,
+    namespaced: false,
+    weight:     193,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.VPC_NAT_GATEWAY }
+    },
+    exact:      false,
+    ifHaveType: HCI.VPC_NAT_GATEWAY,
+  });
+
+  configureType(HCI.IPTABLES_EIP, { hiddenNamespaceGroupButton: true, canYaml: false });
+
+  virtualType({
+    labelKey:   'harvester.externalIP.label',
+    name:       HCI.IPTABLES_EIP,
+    namespaced: false,
+    weight:     192,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.IPTABLES_EIP }
+    },
+    exact:      false,
+    ifHaveType: HCI.IPTABLES_EIP,
+  });
+
+  configureType(HCI.IPTABLES_SNAT_RULE, { hiddenNamespaceGroupButton: true, canYaml: false });
+
+  virtualType({
+    labelKey:   'harvester.snat.label',
+    name:       HCI.IPTABLES_SNAT_RULE,
+    namespaced: false,
+    weight:     191,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.IPTABLES_SNAT_RULE }
+    },
+    exact:      false,
+    ifHaveType: HCI.IPTABLES_SNAT_RULE,
+  });
+
+  configureType(HCI.IPTABLES_DNAT_RULE, { hiddenNamespaceGroupButton: true, canYaml: false });
+
+  virtualType({
+    labelKey:   'harvester.dnat.label',
+    name:       HCI.IPTABLES_DNAT_RULE,
+    namespaced: false,
+    weight:     190,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.IPTABLES_DNAT_RULE }
+    },
+    exact:      false,
+    ifHaveType: HCI.IPTABLES_DNAT_RULE,
+  });
+
   configureType(NETWORK_POLICY, { hiddenNamespaceGroupButton: true, canYaml: false });
 
   virtualType({
     labelKey:   'harvester.networkPolicy.label',
     name:       NETWORK_POLICY,
     namespaced: true,
-    weight:     186,
+    weight:     194,
     route:      {
       name:   `${ PRODUCT_NAME }-c-cluster-resource`,
       params: { resource: NETWORK_POLICY }
     },
     exact:      false,
     ifHaveType: NETWORK_POLICY,
+  });
+
+  configureType(HCI.PROVIDER_NETWORK, { hiddenNamespaceGroupButton: true, canYaml: false });
+
+  virtualType({
+    labelKey:   'harvester.providerNetwork.label',
+    name:       HCI.PROVIDER_NETWORK,
+    namespaced: false,
+    weight:     189,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.PROVIDER_NETWORK }
+    },
+    exact:      false,
+    ifHaveType: HCI.PROVIDER_NETWORK,
+  });
+
+  configureType(HCI.VLAN, { hiddenNamespaceGroupButton: true, canYaml: false });
+
+  headers(HCI.VLAN, [
+    STATE,
+    NAME_COL,
+    {
+      name:  'id',
+      label: 'ID',
+      value: 'spec.id',
+      sort:  'spec.id'
+    },
+    {
+      name:     'provider',
+      labelKey: 'harvester.subnet.provider.label',
+      value:    'spec.provider',
+      sort:     'spec.provider'
+    }
+  ]);
+
+  virtualType({
+    labelKey:   'harvester.vlanNetwork.label',
+    name:       HCI.VLAN,
+    namespaced: false,
+    weight:     188,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.VLAN }
+    },
+    exact:      false,
+    ifHaveType: HCI.VLAN,
   });
 
   configureType(HCI.SNAPSHOT, {
@@ -1001,7 +1296,7 @@ export function init($plugin, store) {
     labelKey:   'harvester.loadBalancer.label',
     name:       HCI.LB,
     namespaced: true,
-    weight:     185,
+    weight:     483,
     route:      {
       name:   `${ PRODUCT_NAME }-c-cluster-resource`,
       params: { resource: HCI.LB }
@@ -1040,7 +1335,7 @@ export function init($plugin, store) {
     labelKey:   'harvester.ipPool.label',
     name:       HCI.IP_POOL,
     namespaced: false,
-    weight:     184,
+    weight:     482,
     route:      {
       name:   `${ PRODUCT_NAME }-c-cluster-resource`,
       params: { resource: HCI.IP_POOL }
@@ -1049,4 +1344,207 @@ export function init($plugin, store) {
     ifHaveType: HCI.IP_POOL,
   });
   headers(HCI.IP_POOL, IP_POOL_HEADERS);
+
+  configureType(HCI.HOST_NETWORK_CONFIG, {
+    location: {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.HOST_NETWORK_CONFIG }
+    },
+    canYaml: false,
+  });
+  virtualType({
+    labelKey:   'harvester.hostNetworkConfig.label',
+    name:       HCI.HOST_NETWORK_CONFIG,
+    namespaced: false,
+    weight:     481,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.HOST_NETWORK_CONFIG }
+    },
+    exact:      false,
+    ifHaveType: HCI.HOST_NETWORK_CONFIG,
+  });
+  // ===========================================================================
+  // Forklift Addon UI Flow
+  // ===========================================================================
+  weightGroup('vmMigration', 0, false);
+
+  // Provider
+  headers(HCI.FORKLIFT_PROVIDER, [
+    STATE,
+    NAME_COL,
+    NAMESPACE_COL,
+    FORKLIFT_PROVIDER_TYPE,
+    FORKLIFT_PROVIDER_URL,
+    AGE
+  ]);
+  configureType(HCI.FORKLIFT_PROVIDER, {
+    resource:  HCI.FORKLIFT_PROVIDER,
+    location:  {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.FORKLIFT_PROVIDER }
+    }
+  });
+  virtualType({
+    name:       HCI.FORKLIFT_PROVIDER,
+    labelKey:   'harvester.addons.vmMigration.labels.provider',
+    group:      'vmMigration',
+    namespaced: true,
+    weight:     100,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.FORKLIFT_PROVIDER }
+    }
+  });
+
+  // NetworkMap
+  headers(HCI.FORKLIFT_NETWORK_MAP, [
+    STATE,
+    NAME_COL,
+    NAMESPACE_COL,
+    FORKLIFT_MAP_SOURCE_PROVIDER,
+    FORKLIFT_MAP_DEST_PROVIDER,
+    AGE
+  ]);
+  configureType(HCI.FORKLIFT_NETWORK_MAP, {
+    resource:  HCI.FORKLIFT_NETWORK_MAP,
+    location:  {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.FORKLIFT_NETWORK_MAP }
+    }
+  });
+  virtualType({
+    name:       HCI.FORKLIFT_NETWORK_MAP,
+    labelKey:   'harvester.addons.vmMigration.labels.networkMap',
+    group:      'vmMigration::Configurations',
+    namespaced: true,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.FORKLIFT_NETWORK_MAP }
+    }
+  });
+
+  // StorageMap
+  headers(HCI.FORKLIFT_STORAGE_MAP, [
+    STATE,
+    NAME_COL,
+    NAMESPACE_COL,
+    FORKLIFT_MAP_SOURCE_PROVIDER,
+    FORKLIFT_MAP_DEST_PROVIDER,
+    AGE
+  ]);
+  configureType(HCI.FORKLIFT_STORAGE_MAP, {
+    resource:  HCI.FORKLIFT_STORAGE_MAP,
+    location:  {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.FORKLIFT_STORAGE_MAP }
+    }
+  });
+  virtualType({
+    name:       HCI.FORKLIFT_STORAGE_MAP,
+    labelKey:   'harvester.addons.vmMigration.labels.storageMap',
+    group:      'vmMigration::Configurations',
+    namespaced: true,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.FORKLIFT_STORAGE_MAP }
+    }
+  });
+
+  // Plan
+  headers(HCI.FORKLIFT_PLAN, [
+    STATE,
+    NAME_COL,
+    NAMESPACE_COL,
+    FORKLIFT_MAP_SOURCE_PROVIDER,
+    FORKLIFT_PLAN_TARGET_NS,
+    FORKLIFT_PLAN_VM_COUNT,
+    AGE
+  ]);
+  configureType(HCI.FORKLIFT_PLAN, {
+    resource:  HCI.FORKLIFT_PLAN,
+    location:  {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.FORKLIFT_PLAN }
+    }
+  });
+  virtualType({
+    name:       HCI.FORKLIFT_PLAN,
+    labelKey:   'harvester.addons.vmMigration.labels.plan',
+    group:      'vmMigration::Configurations',
+    namespaced: true,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.FORKLIFT_PLAN }
+    }
+  });
+
+  // Migration
+  headers(HCI.FORKLIFT_MIGRATION, [
+    STATE,
+    NAME_COL,
+    NAMESPACE_COL,
+    FORKLIFT_MIGRATION_PLAN,
+    AGE
+  ]);
+  configureType(HCI.FORKLIFT_MIGRATION, {
+    resource:  HCI.FORKLIFT_MIGRATION,
+    location:  {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.FORKLIFT_MIGRATION }
+    }
+  });
+  virtualType({
+    name:       HCI.FORKLIFT_MIGRATION,
+    labelKey:   'harvester.addons.vmMigration.labels.migration',
+    group:      'vmMigration::Configurations',
+    namespaced: true,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-resource`,
+      params: { resource: HCI.FORKLIFT_MIGRATION }
+    }
+  });
+  configureType('forklift-create', { subTypes: [HCI.FORKLIFT_PLAN] });
+  virtualType({
+    name:       'forklift-create',
+    labelKey:   'harvester.addons.vmMigration.labels.dashboard',
+    group:      'vmMigration',
+    namespaced: true,
+    weight:     200,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-vm-migration`,
+      params: {}
+    }
+  });
+
+  // Enable SideNav based on Forklift Addon Status
+  // The dashboard entry ('forklift-create') is a schema-less virtual type, so it
+  // is registered with requireSchema:false to still be gated by the addon status.
+  registerAddonSideNav(store, PRODUCT_NAME, {
+    addonName:     ADD_ONS.FORKLIFT_OPERATOR,
+    resourceType:  HCI.ADD_ONS,
+    navGroup:      'vmMigration',
+    requireSchema: false,
+    types:         ['forklift-create']
+  });
+  registerAddonSideNav(store, PRODUCT_NAME, {
+    addonName:    ADD_ONS.FORKLIFT_OPERATOR,
+    resourceType: HCI.ADD_ONS,
+    navGroup:     'vmMigration',
+    types:        [
+      HCI.FORKLIFT_PROVIDER,
+    ]
+  });
+  registerAddonSideNav(store, PRODUCT_NAME, {
+    addonName:    ADD_ONS.FORKLIFT_OPERATOR,
+    resourceType: HCI.ADD_ONS,
+    navGroup:     'vmMigration::Configurations',
+    types:        [
+      HCI.FORKLIFT_NETWORK_MAP,
+      HCI.FORKLIFT_STORAGE_MAP,
+      HCI.FORKLIFT_PLAN,
+      HCI.FORKLIFT_MIGRATION,
+    ]
+  });
+  // ===========================================================================
 }

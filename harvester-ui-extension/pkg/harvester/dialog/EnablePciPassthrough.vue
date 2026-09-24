@@ -1,9 +1,12 @@
 <script>
 import { mapGetters } from 'vuex';
+import { Banner } from '@components/Banner';
 import { Card } from '@components/Card';
+import { Checkbox } from '@components/Form/Checkbox';
 import AsyncButton from '@shell/components/AsyncButton';
 import { escapeHtml } from '@shell/utils/string';
 import { HCI } from '../types';
+import { getHarvesterUserName } from '../utils/auth';
 
 export default {
   name: 'HarvesterEnablePciPassthrough',
@@ -12,7 +15,9 @@ export default {
 
   components: {
     AsyncButton,
+    Banner,
     Card,
+    Checkbox,
   },
 
   props: {
@@ -23,10 +28,16 @@ export default {
   },
 
   data() {
-    return {};
+    return { disableResourcePooling: false };
   },
 
-  computed: { ...mapGetters({ t: 'i18n/t' }) },
+  computed: {
+    ...mapGetters({ t: 'i18n/t' }),
+
+    disableResourcePoolingEnabled() {
+      return this.$store.getters['harvester-common/getFeatureEnabled']('disableResourcePooling');
+    },
+  },
 
   methods: {
     close() {
@@ -34,16 +45,7 @@ export default {
     },
 
     async save(buttonCb) {
-      // isSingleProduct == this is a standalone Harvester cluster
-      const isSingleProduct = this.$store.getters['isSingleProduct'];
-      let userName = 'admin';
-
-      // if this is imported Harvester, there may be users other than 'admin
-      if (!isSingleProduct) {
-        const user = this.$store.getters['auth/v3User'];
-
-        userName = user?.username || user?.id;
-      }
+      const userName = getHarvesterUserName(this.$store.getters);
 
       for (let i = 0; i < this.resources.length; i++) {
         const actionResource = this.resources[i];
@@ -60,9 +62,10 @@ export default {
             }]
           },
           spec: {
-            address:  actionResource.status.address,
-            nodeName: actionResource.status.nodeName,
-            userName
+            address:                actionResource.status.address,
+            nodeName:               actionResource.status.nodeName,
+            userName,
+            disableResourcePooling: this.disableResourcePooling,
           }
         } );
 
@@ -93,7 +96,19 @@ export default {
     </template>
 
     <template #body>
-      {{ t('harvester.pci.enablePassthroughWarning') }}
+      <p class="mb-20">
+        {{ t('harvester.pci.enablePassthroughWarning') }}
+      </p>
+      <template v-if="disableResourcePoolingEnabled">
+        <Checkbox
+          v-model:value="disableResourcePooling"
+          label-key="harvester.pci.disableResourcePooling"
+        />
+        <Banner
+          color="info"
+          :label="t('harvester.pci.disableResourcePoolingDescription')"
+        />
+      </template>
     </template>
 
     <template #actions>

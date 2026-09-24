@@ -39,6 +39,12 @@ export const VOLUME_TYPE = [{
   value: 'cd-rom'
 }];
 
+export const VOLUME_HOTPLUG_ACTION = {
+  INSERT_CDROM_IMAGE: 'INSERT_CDROM_IMAGE',
+  EJECT_CDROM_IMAGE:  'EJECT_CDROM_IMAGE',
+  DETACH_DISK:        'DETACH_DISK'
+};
+
 export const ACCESS_CREDENTIALS = {
   RESET_PWD:  'userPassword',
   INJECT_SSH: 'sshPublicKey'
@@ -73,6 +79,7 @@ export const ADD_ONS = {
   VM_IMPORT_CONTROLLER:             'vm-import-controller',
   LVM_DRIVER:                       'lvm.driver.harvesterhci.io',
   KUBEOVN_OPERATOR:                 'kubeovn-operator',
+  FORKLIFT_OPERATOR:                'forklift-operator',
 };
 
 export const CSI_SECRETS = {
@@ -82,7 +89,12 @@ export const CSI_SECRETS = {
   CSI_NODE_PUBLISH_SECRET_NAMESPACE: 'csi.storage.k8s.io/node-publish-secret-namespace',
   CSI_NODE_STAGE_SECRET_NAME:        'csi.storage.k8s.io/node-stage-secret-name',
   CSI_NODE_STAGE_SECRET_NAMESPACE:   'csi.storage.k8s.io/node-stage-secret-namespace',
+  CSI_NODE_EXPAND_SECRET_NAME:       'csi.storage.k8s.io/node-expand-secret-name',
+  CSI_NODE_EXPAND_SECRET_NAMESPACE:  'csi.storage.k8s.io/node-expand-secret-namespace'
 };
+
+export const FORKLIFT_API_VERSION = 'forklift.konveyor.io/v1beta1';
+export const FORKLIFT_NAMESPACE = 'forklift';
 
 // Some harvester CRD type is not equal to model file name, define the mapping here
 export const HARVESTER_CRD_MAP = {
