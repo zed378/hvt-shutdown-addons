@@ -1,24 +1,44 @@
 <script>
 import jsyaml from 'js-yaml';
+import NodeShutdownCard from './NodeShutdownCard.vue';
 
 const ADDON_TYPE = 'harvesterhci.io.addon';
 const ADDON_ID = 'harvester-system/node-shutdown';
 const STRATEGIES = ['migrate', 'stop', 'force'];
+const VMI_TYPE = 'kubevirt.io.virtualmachineinstance';
+
+function defaultCard(node) {
+  return {
+    node,
+    nodeEnabled: false,
+    nodeCron:    '0 2 * * *',
+    vmEnabled:   false,
+    vmCron:      '0 1 * * *',
+    vmStrategy:  'migrate',
+    vms:         [],
+  };
+}
 
 export default {
   name: 'HarvesterNodeShutdown',
+
+  components: { NodeShutdownCard },
 
   data() {
     return {
       addon:       null,
       token:       '',
       schedule:    { enabled: false, cron: '0 2 * * *', nodes: [], vmStrategy: 'migrate' },
+      nodeCards:   [],
+      vmisByNode:  {},
       nodeOptions: [],
       strategies:  STRATEGIES,
       saving:      false,
       saved:       false,
       saveError:   '',
       loadError:   '',
+      vmLoadError: '',
+      loading:     true,
     };
   },
 
@@ -36,6 +56,7 @@ export default {
         nodes:      Array.isArray(s.nodes) ? s.nodes : [],
         vmStrategy: STRATEGIES.includes(s.vmStrategy) ? s.vmStrategy : 'migrate',
       };
+      this._savedNodeSchedules = Array.isArray(parsed?.nodeSchedules) ? parsed.nodeSchedules : [];
     } catch (e) {
       this.loadError = e?.message || String(e);
     }
@@ -47,6 +68,37 @@ export default {
     } catch (e) {
       this.nodeOptions = [];
     }
+    // VMIs grouped by node for the per-node cards (best-effort).
+    try {
+      const vmis = await this.$store.dispatch('harvester/findAll', { type: VMI_TYPE });
+      const byNode = {};
+
+      (vmis || []).forEach((vmi) => {
+        const nodeName = vmi?.status?.nodeName;
+        const ns = vmi?.metadata?.namespace;
+        const name = vmi?.metadata?.name;
+
+        if (nodeName && ns && name) {
+          (byNode[nodeName] = byNode[nodeName] || []).push(`${ ns }/${ name }`);
+        }
+      });
+      Object.keys(byNode).forEach((k) => byNode[k].sort());
+      this.vmisByNode = byNode;
+    } catch (e) {
+      this.vmisByNode = {};
+      this.vmLoadError = e?.message || String(e);
+    }
+    // One card per known node: cluster nodes plus any node already saved.
+    const savedByName = {};
+    (this._savedNodeSchedules || []).forEach((c) => {
+      if (c && c.node) {
+        savedByName[c.node] = c;
+      }
+    });
+    const names = [...new Set([...this.nodeOptions, ...Object.keys(savedByName)])].sort();
+
+    this.nodeCards = names.map((node) => ({ ...defaultCard(node), ...(savedByName[node] || {}) }));
+    this.loading = false;
   },
 
   computed: {
@@ -73,6 +125,10 @@ export default {
       }
     },
 
+    onCardInput(index, card) {
+      this.$set(this.nodeCards, index, card);
+    },
+
     async save() {
       this.saving = true;
       this.saved = false;
@@ -90,6 +146,15 @@ export default {
           nodes:      this.schedule.nodes,
           vmStrategy: this.schedule.vmStrategy,
         };
+        parsed.nodeSchedules = this.nodeCards.map((c) => ({
+          node:        c.node,
+          nodeEnabled: !!c.nodeEnabled,
+          nodeCron:    c.nodeCron || '0 2 * * *',
+          vmEnabled:   !!c.vmEnabled,
+          vmCron:      c.vmCron || '0 1 * * *',
+          vmStrategy:  STRATEGIES.includes(c.vmStrategy) ? c.vmStrategy : 'migrate',
+          vms:         Array.isArray(c.vms) ? [...c.vms].sort() : [],
+        }));
         this.addon.spec.valuesContent = jsyaml.dump(parsed);
         await this.addon.save();
         this.saved = true;
@@ -171,6 +236,32 @@ export default {
         </div>
         <p v-else class="text-muted">(Could not list nodes — the whole cluster will be targeted.)</p>
       </template>
+
+      <!-- Per-node schedules: one node cron plus one VM cron per card -->
+      <h3 class="mt-30">Per-node schedules</h3>
+      <p class="text-muted mb-10">
+        One card per node. Each card holds a node shutdown schedule and a single VM schedule
+        with selectable VMs. Nothing checked means all VMs on that node.
+      </p>
+      <p
+        v-if="vmLoadError"
+        class="text-warning mb-10"
+      >Could not list VMs: {{ vmLoadError }}. VM checkboxes are empty until the list loads.</p>
+      <p
+        v-if="loading"
+        class="text-muted"
+      >Loading nodes and virtual machines...</p>
+      <p
+        v-else-if="!nodeCards.length"
+        class="text-muted"
+      >No nodes found. Cards appear once the cluster node list loads.</p>
+      <NodeShutdownCard
+        v-for="(card, i) in nodeCards"
+        :key="card.node"
+        :value="card"
+        :vm-options="vmisByNode[card.node] || []"
+        @input="onCardInput(i, $event)"
+      />
 
       <button type="button" class="btn role-primary mt-20" :disabled="saving" @click="save">
         {{ saving ? 'Saving…' : 'Save' }}

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Preview: Node Shutdown per-node (DRAFT)</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; max-width: 680px; background: #fff; color: #222; }
+  .banner { padding: 10px 12px; border-radius: 6px; background: #fff8e1; border: 1px solid #e0c36a; margin-bottom: 16px; }
+  h3 { margin-bottom: 4px; }
+  .muted { color: #666; } .mb-10 { margin-bottom: 10px; } .mt-10 { margin-top: 10px; }
+  .mt-20 { margin-top: 20px; } .mt-30 { margin-top: 30px; }
+  .label { display: block; font-weight: 600; margin-bottom: 6px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .field { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+  .checkbox { display: block; margin: 2px 0; padding: 6px 0; cursor: pointer; }
+  .nodes .checkbox { overflow-wrap: anywhere; }
+  .node-card { border: 1px solid #ccc; border-radius: 4px; padding: 14px; margin-top: 12px; }
+  .node-card h4 { margin: 16px 0 4px; }
+  .node-card-title { margin: 0; font-size: 1.1em; font-weight: 600; }
+  .node-card-summary { display: flex; gap: 10px; align-items: baseline; cursor: pointer; padding: 8px 2px; }
+  .nodes { max-height: 220px; overflow: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px; }
+  .btn { padding: 8px 14px; border-radius: 4px; border: 1px solid #ccc; background: #f4f4f4; cursor: pointer; min-height: 44px; }
+  .btn.primary { background: #0055a4; color: #fff; border-color: #0055a4; margin-top: 20px; }
+  .field:focus-visible, .btn:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #0055a4; outline-offset: 1px; }
+  #msg { margin-top: 10px; padding: 8px 10px; border-radius: 4px; background: #e8f5e9; border: 1px solid #66bb6a; display: none; }
+</style>
+</head>
+<body>
+  <div class="banner"><b>DRAFT structural preview, not the real Rancher render.</b> Same fields as <code>NodeShutdownCard.vue</code> on branch <code>feat/node-vm-schedule-cards</code>; final styling follows the Harvester dashboard theme.</div>
+
+  <h1>Node Shutdown</h1>
+
+  <h3>Authentication token</h3>
+  <p class="muted mb-10">Used to authorize shutdown requests. Applies within ~1 minute.</p>
+  <div class="row"><input id="tok" class="field" type="password" value="secret-token" style="flex:1"> <button id="gen" class="btn" type="button">Generate</button></div>
+
+  <h3 class="mt-30">Per-node schedules</h3>
+  <p class="muted mb-10">One card per node. Each card holds a node shutdown schedule and a single VM schedule with selectable VMs. Nothing checked means all VMs on that node.</p>
+
+  <div class="node-card" data-card>
+    <details open>
+      <summary class="node-card-summary"><span class="node-card-title">node1</span> <span class="muted">node schedule on | VM schedule on (2 selected)</span></summary>
+    <label class="checkbox"><input type="checkbox" data-node-enabled checked> Shut down this node on a schedule</label>
+    <div data-node-block>
+      <label class="label mt-10">Node shutdown time</label>
+      <select class="field" data-preset data-field="nodeCron">
+        <option value="0 1 * * *">Every day at 01:00</option>
+        <option value="0 2 * * *" selected>Every day at 02:00</option>
+        <option value="0 2 * * 0">Every Sunday at 02:00</option>
+        <option value="custom">Custom schedule...</option>
+      </select>
+      <input class="field mt-10" type="text" value="0 2 * * *" data-custom hidden>
+      <p class="muted mt-10" data-summary>Runs every day at 02:00 (UTC).</p>
+    </div>
+    <h4>Virtual machines</h4>
+    <label class="checkbox"><input type="checkbox" data-vm-enabled checked> Shut down selected VMs on a schedule</label>
+    <div data-vm-block>
+      <label class="label mt-10">VM shutdown time (one time for all selected VMs)</label>
+      <select class="field" data-preset data-field="vmCron">
+        <option value="0 1 * * *" selected>Every day at 01:00</option>
+        <option value="0 2 * * *">Every day at 02:00</option>
+        <option value="0 2 * * 0">Every Sunday at 02:00</option>
+        <option value="custom">Custom schedule...</option>
+      </select>
+      <input class="field mt-10" type="text" value="0 1 * * *" data-custom hidden>
+      <p class="muted mt-10" data-summary>Runs every day at 01:00 (UTC).</p>
+      <label class="label mt-10">VM strategy</label>
+      <select class="field"><option selected>migrate</option><option>stop</option><option>force</option></select>
+      <p class="muted mt-10"><b>migrate</b>: live-migrate VMs to surviving nodes (else stop). <b>stop</b>: gracefully stop VMs. <b>force</b>: kill immediately.</p>
+      <div class="row mt-10">
+        <button class="btn" type="button" data-select-all>Select all</button>
+        <button class="btn" type="button" data-clear>Clear</button>
+        <span class="muted" data-count>2 of 3 selected.</span>
+      </div>
+      <div class="nodes mt-10" data-vmlist>
+        <label class="checkbox"><input type="checkbox" checked> default/web-01</label>
+        <label class="checkbox"><input type="checkbox" checked> default/db-01</label>
+        <label class="checkbox"><input type="checkbox"> monitoring/agent-01</label>
+      </div>
+      <p class="muted mt-10">Stopped VMs stay off after the node powers back on. Start them again from the Harvester UI.</p>
+    </div>
+    </details>
+  </div>
+
+  <div class="node-card" data-card>
+    <details>
+      <summary class="node-card-summary"><span class="node-card-title">node2</span> <span class="muted">schedules off</span></summary>
+    <label class="checkbox"><input type="checkbox" data-node-enabled> Shut down this node on a schedule</label>
+    <div data-node-block hidden>
+      <label class="label mt-10">Node shutdown time</label>
+      <select class="field" data-preset data-field="nodeCron">
+        <option value="0 1 * * *">Every day at 01:00</option>
+        <option value="0 2 * * *" selected>Every day at 02:00</option>
+        <option value="0 2 * * 0">Every Sunday at 02:00</option>
+        <option value="custom">Custom schedule...</option>
+      </select>
+      <input class="field mt-10" type="text" value="0 2 * * *" data-custom hidden>
+      <p class="muted mt-10" data-summary>Runs every day at 02:00 (UTC).</p>
+    </div>
+    <h4>Virtual machines</h4>
+    <label class="checkbox"><input type="checkbox" data-vm-enabled> Shut down selected VMs on a schedule</label>
+    <div data-vm-block hidden>
+      <p class="muted mt-10">No VMs found on this node, or the list could not be loaded. Saving with nothing checked targets all VMs on this node.</p>
+    </div>
+    </details>
+  </div>
+
+  <button id="save" class="btn primary" type="button">Save</button>
+  <div id="msg" role="status"></div>
+
+<script>
+(function () {
+  var SUMMARIES = {
+    '0 1 * * *': 'Runs every day at 01:00 (UTC).',
+    '0 2 * * *': 'Runs every day at 02:00 (UTC).',
+    '0 2 * * 0': 'Runs every Sunday at 02:00 (UTC).'
+  };
+
+  function randomHex(bytes) {
+    var a = new Uint8Array(bytes);
+    crypto.getRandomValues(a);
+    return Array.from(a, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+  }
+
+  document.getElementById('gen').addEventListener('click', function () {
+    document.getElementById('tok').value = randomHex(32);
+  });
+
+  document.getElementById('save').addEventListener('click', function () {
+    var msg = document.getElementById('msg');
+    msg.textContent = 'Saved (preview only, nothing was sent).';
+    msg.style.display = 'block';
+  });
+
+  function bindSchedule(block) {
+    var sel = block.querySelector('[data-preset]');
+    if (!sel) return;
+    var custom = block.querySelector('[data-custom]');
+    var summary = block.querySelector('[data-summary]');
+
+    function render() {
+      var v = sel.value;
+      if (custom) custom.hidden = (v !== 'custom');
+      if (summary) {
+        summary.textContent = SUMMARIES[v] || ('Runs on a custom schedule: ' + (custom ? custom.value : v) + ' (UTC).');
+      }
+    }
+
+    sel.addEventListener('change', render);
+    if (custom) custom.addEventListener('input', render);
+    render();
+  }
+
+  document.querySelectorAll('[data-card]').forEach(function (card) {
+    var nodeCb = card.querySelector('[data-node-enabled]');
+    var nodeBlock = card.querySelector('[data-node-block]');
+    var vmCb = card.querySelector('[data-vm-enabled]');
+    var vmBlock = card.querySelector('[data-vm-block]');
+
+    if (nodeCb && nodeBlock) {
+      nodeCb.addEventListener('change', function () { nodeBlock.hidden = !nodeCb.checked; });
+    }
+    if (vmCb && vmBlock) {
+      vmCb.addEventListener('change', function () { vmBlock.hidden = !vmCb.checked; });
+    }
+
+    card.querySelectorAll('[data-preset]').forEach(function (sel) {
+      bindSchedule(sel.closest('div'));
+    });
+
+    var list = card.querySelector('[data-vmlist]');
+    var count = card.querySelector('[data-count]');
+    function boxes() { return list ? Array.from(list.querySelectorAll('input[type=checkbox]')) : []; }
+    function renderCount() {
+      if (!count || !list) return;
+      var on = boxes().filter(function (b) { return b.checked; }).length;
+      count.textContent = on + ' of ' + boxes().length + ' selected.';
+    }
+    if (list) {
+      boxes().forEach(function (b) { b.addEventListener('change', renderCount); });
+      renderCount();
+      var all = card.querySelector('[data-select-all]');
+      var clear = card.querySelector('[data-clear]');
+      if (all) all.addEventListener('click', function () { boxes().forEach(function (b) { b.checked = true; }); renderCount(); });
+      if (clear) clear.addEventListener('click', function () { boxes().forEach(function (b) { b.checked = false; }); renderCount(); });
+    }
+  });
+})();
+</script>
+</body>
+</html>

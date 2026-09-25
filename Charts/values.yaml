@@ -176,6 +176,13 @@ schedule:
   nodes: []
   vmStrategy: "migrate"
 
+# Per-node schedules (managed from the dashboard Node Shutdown page, one card
+# per node). Each entry holds ONE node cron and ONE VM cron; `vms` lists
+# namespace/name pairs checked in the UI. Empty `vms` targets all VMs on that
+# node. Inert until the CronJob template ranges over it; the legacy `schedule`
+# block above keeps working unchanged.
+nodeSchedules: []
+
 # Network policy (optional - restricts incoming traffic to the API port).
 # IMPORTANT: this DaemonSet uses hostNetwork: true. Kubernetes NetworkPolicy
 # generally does NOT apply to hostNetwork pods (traffic to the node IP bypasses
