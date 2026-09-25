@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Node Shutdown - Harvester</title>
+<title>Harvester HCI - Node Shutdown & Power-on</title>
 <style>
   :root {
     --bg-page: #141724;
@@ -66,6 +66,7 @@
     text-decoration: none;
     cursor: pointer;
     border-left: 3px solid transparent;
+    user-select: none;
   }
   .nav-item:hover {
     background: rgba(255,255,255,0.04);
@@ -119,7 +120,7 @@
   h1 {
     font-size: 1.7em;
     font-weight: 600;
-    margin: 0 0 20px 0;
+    margin: 0 0 16px 0;
     color: #fff;
   }
   h3 {
@@ -139,7 +140,9 @@
     font-size: 0.88em;
     line-height: 1.4;
   }
+  .mb-5 { margin-bottom: 5px; }
   .mb-10 { margin-bottom: 10px; }
+  .mb-20 { margin-bottom: 20px; }
   .mt-5 { margin-top: 5px; }
   .mt-10 { margin-top: 10px; }
   .mt-15 { margin-top: 15px; }
@@ -231,7 +234,7 @@
   }
   .node-card summary .node-title { color: #fff; }
   .node-card summary .node-status { font-size: 0.85em; color: var(--text-muted); font-weight: normal; }
-  #msg {
+  .save-msg {
     margin-top: 16px;
     padding: 12px 14px;
     border-radius: 4px;
@@ -263,7 +266,8 @@
       <div class="nav-item">vGPU MIG Configurations <span class="count">0</span></div>
       <div class="nav-item">USB Devices <span class="count">3</span></div>
       <div class="nav-item">NetBird</div>
-      <div class="nav-item active">Node Shutdown</div>
+      <div class="nav-item active" id="nav-shutdown" onclick="showTab('shutdown')">Node Shutdown</div>
+      <div class="nav-item" id="nav-poweron" onclick="showTab('poweron')">Node Power-on</div>
       <div class="nav-item">Add-ons <span class="count">11</span></div>
       <div class="nav-item">Secrets</div>
       <div class="nav-item">Settings <span class="count">44</span></div>
@@ -277,13 +281,14 @@
   <!-- Main Content Area -->
   <div class="main-wrapper">
     <div class="top-header">
-      <div class="breadcrumb">Advanced &gt; <strong>Node Shutdown</strong></div>
+      <div class="breadcrumb" id="breadcrumb-text">Advanced &gt; <strong>Node Shutdown</strong></div>
     </div>
 
-    <div class="content">
+    <!-- ==================== 1. PAGE: NODE SHUTDOWN ==================== -->
+    <div class="content" id="page-shutdown">
       <h1>Node Shutdown</h1>
 
-      <!-- 1. Authentication Token -->
+      <!-- Authentication Token -->
       <h3>Authentication token</h3>
       <p class="muted mb-10">Used to authorize shutdown requests. Applies within ~1 minute.</p>
       <div class="row">
@@ -291,7 +296,7 @@
         <button id="gen" class="btn" type="button">Generate</button>
       </div>
 
-      <!-- 2. Scheduled Shutdown -->
+      <!-- Scheduled Shutdown -->
       <h3 class="mt-30">Scheduled shutdown</h3>
       <label class="checkbox">
         <input type="checkbox" id="shutdown-enable" checked>
@@ -311,8 +316,81 @@
         <p class="muted mt-5"><b>migrate</b>: live-migrate VMs to surviving nodes (else stop) — for selected-node shutdown. <b>stop</b>: gracefully stop VMs. <b>force</b>: kill immediately.</p>
       </div>
 
-      <!-- 3. Scheduled Power-on -->
-      <h3 class="mt-30">Scheduled power-on</h3>
+      <!-- Per-Node Shutdown Schedules -->
+      <h3 class="mt-30">Per-node schedules</h3>
+      <p class="muted mb-10">
+        One card per node. Each card holds a node shutdown schedule and a single VM schedule with selectable VMs.
+      </p>
+
+      <!-- Worker Node Card -->
+      <div class="node-card">
+        <details open>
+          <summary>
+            <span class="node-title">harvester-worker-1</span>
+            <span class="node-status">node shutdown on | VM shutdown on (2 selected)</span>
+          </summary>
+
+          <label class="checkbox mt-15"><input type="checkbox" checked> <span>Shut down this node on a schedule</span></label>
+          <div class="mt-10">
+            <label class="label">Node shutdown time</label>
+            <select class="field"><option selected>Every day at 02:00 (0 2 * * *)</option></select>
+          </div>
+
+          <h4 class="mt-20">Virtual machines</h4>
+          <label class="checkbox"><input type="checkbox" checked> <span>Shut down selected VMs on a schedule</span></label>
+          <div class="mt-10">
+            <label class="label">VM shutdown time</label>
+            <select class="field"><option selected>Every day at 01:00 (0 1 * * *)</option></select>
+          </div>
+          <div class="mt-10">
+            <label class="label">VM strategy</label>
+            <select class="field">
+              <option selected>migrate</option>
+              <option>stop</option>
+              <option>force</option>
+            </select>
+            <p class="muted mt-5"><b>migrate</b>: live-migrate VMs to surviving nodes (else stop). <b>stop</b>: gracefully stop VMs. <b>force</b>: kill immediately.</p>
+          </div>
+          <div class="row mt-10">
+            <button class="btn" type="button">Select all</button>
+            <button class="btn" type="button">Clear</button>
+            <span class="muted">2 of 2 selected.</span>
+          </div>
+          <div class="nodes-box mt-10">
+            <label class="checkbox"><input type="checkbox" checked> <span>default/db-mysql</span></label>
+            <label class="checkbox"><input type="checkbox" checked> <span>default/web-frontend</span></label>
+          </div>
+          <p class="muted mt-10">Stopped VMs stay off after the node powers back on. Start them again from the Harvester UI or Node Power-on.</p>
+        </details>
+      </div>
+
+      <!-- Management Node Card -->
+      <div class="node-card">
+        <details>
+          <summary>
+            <span class="node-title">harvester-mgmt-node</span>
+            <span class="node-status">schedules off</span>
+          </summary>
+          <p class="muted mt-10">
+            This node coordinates the cluster and remains powered on.
+          </p>
+        </details>
+      </div>
+
+      <!-- Save Button -->
+      <button id="save-shutdown" class="btn primary mt-30" type="button">Save</button>
+      <div id="msg-shutdown" class="save-msg">Saved shutdown configuration.</div>
+    </div>
+
+    <!-- ==================== 2. PAGE: NODE POWER-ON ==================== -->
+    <div class="content" id="page-poweron" style="display: none;">
+      <h1>Node Power-on</h1>
+      <p class="muted mb-20">
+        Configure automated power-on for physical nodes via IPMI over LAN and virtual machines via KubeVirt API.
+      </p>
+
+      <!-- Scheduled Power-on -->
+      <h3>Scheduled power-on</h3>
       <label class="checkbox">
         <input type="checkbox" id="poweron-enable" checked>
         <span>Enable a scheduled power-on</span>
@@ -340,10 +418,10 @@
         </label>
       </div>
 
-      <!-- 4. Per-Node Schedules -->
+      <!-- Per-Node Power-on Schedules -->
       <h3 class="mt-30">Per-node schedules</h3>
       <p class="muted mb-10">
-        One card per node. Each card holds a node shutdown schedule and a single VM schedule with selectable VMs.
+        One card per node. Configure BMC IP address, server power-on schedule, and virtual machines to start.
       </p>
 
       <!-- Worker Node Card -->
@@ -351,29 +429,10 @@
         <details open>
           <summary>
             <span class="node-title">harvester-worker-1</span>
-            <span class="node-status">node shutdown on | node power-on on</span>
+            <span class="node-status">node power-on on | VM power-on on (2 selected)</span>
           </summary>
 
-          <h4 class="mt-15">Shutdown</h4>
-          <label class="checkbox"><input type="checkbox" checked> <span>Shut down this node on a schedule</span></label>
-          <div class="mt-10">
-            <label class="label">Node shutdown time</label>
-            <select class="field"><option selected>Every day at 02:00 (0 2 * * *)</option></select>
-          </div>
-          <h4 class="mt-15">Virtual machines</h4>
-          <label class="checkbox"><input type="checkbox" checked> <span>Shut down selected VMs on a schedule</span></label>
-          <div class="row mt-10">
-            <button class="btn" type="button">Select all</button>
-            <button class="btn" type="button">Clear</button>
-            <span class="muted">2 of 2 selected.</span>
-          </div>
-          <div class="nodes-box mt-10">
-            <label class="checkbox"><input type="checkbox" checked> <span>default/db-mysql</span></label>
-            <label class="checkbox"><input type="checkbox" checked> <span>default/web-frontend</span></label>
-          </div>
-
-          <h4 class="mt-20">Power-on</h4>
-          <label class="checkbox"><input type="checkbox" checked> <span>Power on this node on a schedule</span></label>
+          <label class="checkbox mt-15"><input type="checkbox" checked> <span>Power on this node on a schedule</span></label>
           <div class="mt-10">
             <label class="label">BMC IP address</label>
             <input type="text" class="field" value="192.168.10.51" placeholder="192.168.10.51">
@@ -383,10 +442,10 @@
             <select class="field"><option selected>Every weekday at 06:00 (0 6 * * 1-5)</option></select>
           </div>
 
-          <h4 class="mt-20">Virtual machines (Power-on)</h4>
+          <h4 class="mt-20">Virtual machines</h4>
           <label class="checkbox"><input type="checkbox" checked> <span>Power on selected VMs on a schedule</span></label>
           <div class="mt-10">
-            <label class="label">VM power-on time</label>
+            <label class="label">VM power-on time (starts automatically after node is Ready)</label>
             <select class="field"><option selected>Every weekday at 06:15 (0 6 * * 1-5)</option></select>
           </div>
           <div class="row mt-10">
@@ -405,31 +464,61 @@
       <div class="node-card">
         <details>
           <summary>
-            <span class="node-title">harvester-mgmt-node</span>
-            <span class="node-status">schedules off</span>
+            <span class="node-title">harvester-mgmt-node (Management Node)</span>
+            <span class="node-status">always on</span>
           </summary>
           <p class="muted mt-10">
-            This management node coordinates the cluster, hosts the IPMI power-on service, and remains powered on.
+            Designated management node. Remains permanently powered on to coordinate IPMI power-on and KubeVirt commands for the rest of the cluster.
           </p>
         </details>
       </div>
 
       <!-- Save Button -->
-      <button id="save" class="btn primary mt-30" type="button">Save</button>
-      <div id="msg">Saved.</div>
+      <button id="save-poweron" class="btn primary mt-30" type="button">Save</button>
+      <div id="msg-poweron" class="save-msg">Saved power-on configuration.</div>
     </div>
+
   </div>
 
 <script>
+  function showTab(tab) {
+    var navShutdown = document.getElementById('nav-shutdown');
+    var navPoweron = document.getElementById('nav-poweron');
+    var pageShutdown = document.getElementById('page-shutdown');
+    var pagePoweron = document.getElementById('page-poweron');
+    var bc = document.getElementById('breadcrumb-text');
+
+    if (tab === 'poweron') {
+      navShutdown.classList.remove('active');
+      navPoweron.classList.add('active');
+      pageShutdown.style.display = 'none';
+      pagePoweron.style.display = 'block';
+      bc.innerHTML = 'Advanced &gt; <strong>Node Power-on</strong>';
+    } else {
+      navPoweron.classList.remove('active');
+      navShutdown.classList.add('active');
+      pagePoweron.style.display = 'none';
+      pageShutdown.style.display = 'block';
+      bc.innerHTML = 'Advanced &gt; <strong>Node Shutdown</strong>';
+    }
+  }
+
   document.getElementById('gen').addEventListener('click', function () {
     var a = new Uint8Array(32);
     crypto.getRandomValues(a);
     document.getElementById('tok').value = Array.from(a, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
   });
 
-  document.getElementById('save').addEventListener('click', function () {
-    var msg = document.getElementById('msg');
+  document.getElementById('save-shutdown').addEventListener('click', function () {
+    var msg = document.getElementById('msg-shutdown');
     msg.style.display = 'block';
+    setTimeout(function() { msg.style.display = 'none'; }, 3000);
+  });
+
+  document.getElementById('save-poweron').addEventListener('click', function () {
+    var msg = document.getElementById('msg-poweron');
+    msg.style.display = 'block';
+    setTimeout(function() { msg.style.display = 'none'; }, 3000);
   });
 
   var sCheck = document.getElementById('shutdown-enable');
