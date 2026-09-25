@@ -3,24 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Harvester HCI - Node Shutdown & Power-on (via IPMI)</title>
+<title>Node Shutdown - Harvester</title>
 <style>
   :root {
     --bg-page: #141724;
     --bg-sidebar: #1a1e30;
     --bg-card: #20253b;
-    --bg-card-header: #282e49;
     --bg-input: #151827;
     --border: #2e3553;
-    --border-hover: #3d466e;
     --primary: #2458eb;
     --primary-hover: #1b47c4;
     --text-main: #f0f2f8;
     --text-muted: #8c96b5;
-    --text-success: #4caf50;
     --sidebar-active: #2a3558;
-    --badge-bg: #273b6b;
-    --badge-text: #64b5f6;
   }
   * { box-sizing: border-box; }
   body {
@@ -45,17 +40,8 @@
     padding: 18px 20px;
     font-size: 1.1em;
     font-weight: 700;
-    display: flex;
-    align-items: center;
-    gap: 10px;
     border-bottom: 1px solid var(--border);
     color: #fff;
-  }
-  .sidebar-header span.logo {
-    display: inline-block;
-    width: 24px; height: 24px;
-    background: var(--primary);
-    border-radius: 4px;
   }
   .sidebar-menu {
     flex: 1;
@@ -116,7 +102,6 @@
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
-    justify-content: space-between;
     padding: 0 28px;
     background: var(--bg-sidebar);
   }
@@ -142,13 +127,10 @@
     font-weight: 600;
     margin: 28px 0 6px 0;
     color: #fff;
-    display: flex;
-    align-items: center;
-    gap: 8px;
   }
   h4 {
-    margin: 16px 0 8px 0;
-    font-size: 1em;
+    margin: 18px 0 8px 0;
+    font-size: 0.98em;
     font-weight: 600;
     color: #e2e6f3;
   }
@@ -214,7 +196,6 @@
     cursor: pointer;
     font-weight: 500;
     font-size: 0.9em;
-    transition: background 0.15s ease;
   }
   .btn:hover { background: #333d61; }
   .btn.primary {
@@ -225,15 +206,6 @@
   }
   .btn.primary:hover { background: var(--primary-hover); }
 
-  .badge {
-    background: var(--badge-bg);
-    color: var(--badge-text);
-    padding: 2px 8px;
-    border-radius: 12px;
-    font-size: 0.72em;
-    font-weight: 600;
-    letter-spacing: 0.4px;
-  }
   .nodes-box {
     max-height: 180px;
     overflow-y: auto;
@@ -259,11 +231,6 @@
   }
   .node-card summary .node-title { color: #fff; }
   .node-card summary .node-status { font-size: 0.85em; color: var(--text-muted); font-weight: normal; }
-  hr {
-    border: none;
-    border-top: 1px solid var(--border);
-    margin: 20px 0;
-  }
   #msg {
     margin-top: 16px;
     padding: 12px 14px;
@@ -274,25 +241,13 @@
     display: none;
     font-weight: 500;
   }
-  .feature-pill {
-    background: linear-gradient(135deg, #1e3a8a, #0284c7);
-    color: #fff;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75em;
-    font-weight: 600;
-    margin-left: 8px;
-  }
 </style>
 </head>
 <body>
 
-  <!-- Left Sidebar (Identical to Harvester UI Screenshot) -->
+  <!-- Left Sidebar (Matching Harvester UI) -->
   <aside class="sidebar">
-    <div class="sidebar-header">
-      <span class="logo"></span>
-      <span>Harvester HCI</span>
-    </div>
+    <div class="sidebar-header">Harvester</div>
     <div class="sidebar-menu">
       <div class="nav-item">Backup and Snapshots <span>›</span></div>
       <div class="nav-item">Monitoring & Logging <span>›</span></div>
@@ -322,7 +277,7 @@
   <!-- Main Content Area -->
   <div class="main-wrapper">
     <div class="top-header">
-      <div class="breadcrumb">Advanced &gt; <strong>Node Shutdown & Power-on</strong></div>
+      <div class="breadcrumb">Advanced &gt; <strong>Node Shutdown</strong></div>
     </div>
 
     <div class="content">
@@ -330,13 +285,13 @@
 
       <!-- 1. Authentication Token -->
       <h3>Authentication token</h3>
-      <p class="muted mb-10">Used to authorize shutdown & power-on requests. Applies within ~1 minute.</p>
+      <p class="muted mb-10">Used to authorize shutdown requests. Applies within ~1 minute.</p>
       <div class="row">
         <input id="tok" class="field" type="password" value="cFFMZURta3hoTXB5YVlVVTN2MTQzYlZ1WkM5QmdHY3pSS1dqTThIaVJ0OXJVMUVaM1N6alowNjNaZGl3WUZhcA==" style="flex:1;">
         <button id="gen" class="btn" type="button">Generate</button>
       </div>
 
-      <!-- 2. Scheduled Shutdown (As in original screenshot) -->
+      <!-- 2. Scheduled Shutdown -->
       <h3 class="mt-30">Scheduled shutdown</h3>
       <label class="checkbox">
         <input type="checkbox" id="shutdown-enable" checked>
@@ -344,12 +299,7 @@
       </label>
       <div id="shutdown-body">
         <label class="label mt-10">Cron schedule</label>
-        <select class="field" data-preset>
-          <option value="0 1 * * *">Every day at 01:00</option>
-          <option value="0 2 * * *" selected>Every day at 02:00</option>
-          <option value="0 2 * * 0">Every Sunday at 02:00</option>
-          <option value="custom">Custom schedule...</option>
-        </select>
+        <input type="text" class="field" value="0 2 * * *">
         <p class="muted mt-5">Standard cron (UTC). Example: <code>0 2 * * *</code> = 02:00 daily.</p>
 
         <label class="label mt-15">VM strategy</label>
@@ -358,61 +308,42 @@
           <option>stop</option>
           <option>force</option>
         </select>
-        <p class="muted mt-5"><b>migrate</b>: live-migrate VMs to surviving nodes (else stop). <b>stop</b>: gracefully stop VMs. <b>force</b>: kill immediately.</p>
+        <p class="muted mt-5"><b>migrate</b>: live-migrate VMs to surviving nodes (else stop) — for selected-node shutdown. <b>stop</b>: gracefully stop VMs. <b>force</b>: kill immediately.</p>
       </div>
 
-      <!-- 3. Scheduled Power-on (NEW FEATURE - Placed directly below Scheduled shutdown) -->
-      <h3 class="mt-30">
-        ⚡ Scheduled power-on (IPMI &amp; VMs)
-        <span class="feature-pill">FITUR BARU</span>
-      </h3>
-      <p class="muted mb-10">
-        Wakes up physical servers via IPMI over LAN from the management node, and automatically starts target VMs once nodes reach Ready state.
-      </p>
-
+      <!-- 3. Scheduled Power-on -->
+      <h3 class="mt-30">Scheduled power-on</h3>
       <label class="checkbox">
         <input type="checkbox" id="poweron-enable" checked>
         <span>Enable a scheduled power-on</span>
       </label>
 
       <div id="poweron-body">
-        <div class="mt-15">
-          <label class="label">IPMI Credentials (BMC Access)</label>
-          <div class="row">
-            <input type="text" placeholder="IPMI Username (e.g. admin)" value="admin" class="field" style="flex: 1;">
-            <input type="password" placeholder="IPMI Password" value="••••••••••••" class="field" style="flex: 1;">
-          </div>
-          <p class="muted mt-5">Default credentials used to authenticate with server BMCs via IPMI over LAN.</p>
-        </div>
+        <label class="label mt-10">Node cron schedule</label>
+        <input type="text" class="field" value="0 6 * * 1-5">
+        <p class="muted mt-5">Standard cron (UTC) for baremetal power-on via IPMI. Example: <code>0 6 * * 1-5</code> = 06:00 Mon-Fri.</p>
 
-        <label class="label mt-15">Physical node power-on cron (IPMI Wake-up)</label>
-        <select class="field">
-          <option selected>Every weekday at 06:00 (Mon-Fri) (0 6 * * 1-5)</option>
-          <option>Every day at 06:00 (0 6 * * *)</option>
-          <option>Every day at 07:00 (0 7 * * *)</option>
-          <option>Custom schedule...</option>
-        </select>
-        <p class="muted mt-5">Standard cron (UTC) to send IPMI power-on. Example: <code>0 6 * * 1-5</code> = 06:00 Mon-Fri.</p>
-
-        <label class="label mt-15">Virtual machine power-on cron</label>
-        <select class="field">
-          <option selected>Every weekday at 06:15 (Mon-Fri) (0 6 * * 1-5)</option>
-          <option>Every day at 06:15 (0 6 * * *)</option>
-          <option>Every day at 07:15 (0 7 * * *)</option>
-          <option>Custom schedule...</option>
-        </select>
+        <label class="label mt-15">VM cron schedule</label>
+        <input type="text" class="field" value="0 6 * * 1-5">
         <p class="muted mt-5">Standard cron (UTC) for starting VirtualMachines after nodes boot.</p>
+
+        <label class="label mt-15">IPMI username</label>
+        <input type="text" placeholder="admin" value="admin" class="field">
+
+        <label class="label mt-15">IPMI password</label>
+        <input type="password" placeholder="Password" value="password" class="field">
+        <p class="muted mt-5">Credentials to access server BMCs via IPMI over LAN.</p>
 
         <label class="checkbox mt-15">
           <input type="checkbox" checked>
-          <span>Wait for physical nodes to become Ready in Kubernetes before powering on VMs</span>
+          <span>Wait for nodes to become Ready in Kubernetes before powering on VMs</span>
         </label>
       </div>
 
       <!-- 4. Per-Node Schedules -->
       <h3 class="mt-30">Per-node schedules</h3>
       <p class="muted mb-10">
-        One card per physical node. Each card holds shutdown schedules and IPMI power-on configurations.
+        One card per node. Each card holds a node shutdown schedule and a single VM schedule with selectable VMs.
       </p>
 
       <!-- Worker Node Card -->
@@ -420,16 +351,16 @@
         <details open>
           <summary>
             <span class="node-title">harvester-worker-1</span>
-            <span class="node-status">shutdown on | power-on on (IPMI: 192.168.10.51)</span>
+            <span class="node-status">node shutdown on | node power-on on</span>
           </summary>
 
-          <h4 class="mt-15">🔻 Shutdown Schedule</h4>
+          <h4 class="mt-15">Shutdown</h4>
           <label class="checkbox"><input type="checkbox" checked> <span>Shut down this node on a schedule</span></label>
           <div class="mt-10">
             <label class="label">Node shutdown time</label>
             <select class="field"><option selected>Every day at 02:00 (0 2 * * *)</option></select>
           </div>
-          <h4 class="mt-15">Virtual machines to stop</h4>
+          <h4 class="mt-15">Virtual machines</h4>
           <label class="checkbox"><input type="checkbox" checked> <span>Shut down selected VMs on a schedule</span></label>
           <div class="row mt-10">
             <button class="btn" type="button">Select all</button>
@@ -441,24 +372,22 @@
             <label class="checkbox"><input type="checkbox" checked> <span>default/web-frontend</span></label>
           </div>
 
-          <hr />
-
-          <h4 class="mt-10">⚡ Power-on Schedule (via IPMI)</h4>
-          <label class="checkbox"><input type="checkbox" checked> <span>Power on this node on a schedule (via IPMI)</span></label>
+          <h4 class="mt-20">Power-on</h4>
+          <label class="checkbox"><input type="checkbox" checked> <span>Power on this node on a schedule</span></label>
           <div class="mt-10">
-            <label class="label">BMC / IPMI IP Address</label>
-            <input type="text" class="field" value="192.168.10.51" placeholder="e.g. 192.168.10.51">
-            <p class="muted mt-5">Out-of-band management IP for this physical server.</p>
+            <label class="label">BMC IP address</label>
+            <input type="text" class="field" value="192.168.10.51" placeholder="192.168.10.51">
+            <p class="muted mt-5">IPMI / BMC IP address for this physical server.</p>
 
             <label class="label mt-10">Node power-on time</label>
-            <select class="field"><option selected>Every weekday at 06:00 (Mon-Fri)</option></select>
+            <select class="field"><option selected>Every weekday at 06:00 (0 6 * * 1-5)</option></select>
           </div>
 
-          <h4 class="mt-15">Virtual machines to start</h4>
-          <label class="checkbox"><input type="checkbox" checked> <span>Start selected VMs on a schedule</span></label>
+          <h4 class="mt-20">Virtual machines (Power-on)</h4>
+          <label class="checkbox"><input type="checkbox" checked> <span>Power on selected VMs on a schedule</span></label>
           <div class="mt-10">
-            <label class="label">VM power-on time (starts automatically after node is Ready)</label>
-            <select class="field"><option selected>Every weekday at 06:15 (Mon-Fri)</option></select>
+            <label class="label">VM power-on time</label>
+            <select class="field"><option selected>Every weekday at 06:15 (0 6 * * 1-5)</option></select>
           </div>
           <div class="row mt-10">
             <button class="btn" type="button">Select all</button>
@@ -472,22 +401,22 @@
         </details>
       </div>
 
-      <!-- Management Node Card (Excluded from shutdown) -->
+      <!-- Management Node Card -->
       <div class="node-card">
         <details>
           <summary>
             <span class="node-title">harvester-mgmt-node</span>
-            <span class="badge">MANAGEMENT NODE (Always ON)</span>
+            <span class="node-status">schedules off</span>
           </summary>
           <p class="muted mt-10">
-            Node manajemen ini menjalankan kontrol cluster Harvester, API service, dan CronJob untuk memicu IPMI power-on server worker. Node ini tetap hidup.
+            This management node coordinates the cluster, hosts the IPMI power-on service, and remains powered on.
           </p>
         </details>
       </div>
 
       <!-- Save Button -->
       <button id="save" class="btn primary mt-30" type="button">Save</button>
-      <div id="msg">✓ Saved successfully! IPMI Power-on and Shutdown configurations updated in Harvester.</div>
+      <div id="msg">Saved.</div>
     </div>
   </div>
 
@@ -501,7 +430,6 @@
   document.getElementById('save').addEventListener('click', function () {
     var msg = document.getElementById('msg');
     msg.style.display = 'block';
-    setTimeout(function() { msg.scrollIntoView({ behavior: 'smooth' }); }, 100);
   });
 
   var sCheck = document.getElementById('shutdown-enable');

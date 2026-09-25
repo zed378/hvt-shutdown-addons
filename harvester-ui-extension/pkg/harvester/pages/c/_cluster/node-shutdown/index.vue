@@ -295,40 +295,15 @@ export default {
         <p v-else class="text-muted">(Could not list nodes — the whole cluster will be targeted.)</p>
       </template>
 
-      <!-- Scheduled power-on (IPMI & VMs) -->
-      <h3 class="mt-30">⚡ Scheduled power-on (IPMI &amp; VMs)</h3>
-      <p class="text-muted mb-10">
-        Automatically wakes up physical nodes via IPMI over LAN and powers on target VirtualMachines once nodes are Ready.
-      </p>
-
+      <!-- Scheduled power-on -->
+      <h3 class="mt-30">Scheduled power-on</h3>
       <label class="checkbox">
         <input v-model="poweronSchedule.enabled" type="checkbox" />
         Enable a scheduled power-on
       </label>
 
       <template v-if="poweronSchedule.enabled">
-        <div class="mt-15">
-          <label class="label">IPMI Credentials</label>
-          <div class="row">
-            <input
-              v-model="ipmiUser"
-              type="text"
-              placeholder="IPMI Username (e.g. admin)"
-              class="field"
-              style="flex: 1;"
-            />
-            <input
-              v-model="ipmiPassword"
-              type="password"
-              placeholder="IPMI Password"
-              class="field"
-              style="flex: 1;"
-            />
-          </div>
-          <p class="text-muted mt-5">Default credentials used to authenticate with server BMCs via IPMI over LAN.</p>
-        </div>
-
-        <label class="label mt-15">Physical node power-on cron</label>
+        <label class="label mt-15">Node cron schedule</label>
         <input
           v-model="poweronSchedule.nodeCron"
           type="text"
@@ -336,9 +311,9 @@ export default {
           placeholder="0 6 * * 1-5"
           class="field"
         />
-        <p class="text-muted mt-5">Standard cron (UTC) to send IPMI power-on. Example: <code>0 6 * * 1-5</code> = 06:00 Mon-Fri.</p>
+        <p class="text-muted mt-5">Standard cron (UTC) for baremetal power-on via IPMI. Example: <code>0 6 * * 1-5</code> = 06:00 Mon-Fri.</p>
 
-        <label class="label mt-15">Virtual machine power-on cron</label>
+        <label class="label mt-15">VM cron schedule</label>
         <input
           v-model="poweronSchedule.vmCron"
           type="text"
@@ -348,9 +323,26 @@ export default {
         />
         <p class="text-muted mt-5">Standard cron (UTC) for starting VirtualMachines after nodes boot.</p>
 
+        <label class="label mt-15">IPMI username</label>
+        <input
+          v-model="ipmiUser"
+          type="text"
+          placeholder="admin"
+          class="field"
+        />
+
+        <label class="label mt-15">IPMI password</label>
+        <input
+          v-model="ipmiPassword"
+          type="password"
+          placeholder="Password"
+          class="field"
+        />
+        <p class="text-muted mt-5">Credentials to access server BMCs via IPMI over LAN.</p>
+
         <label class="checkbox mt-15">
           <input v-model="poweronSchedule.waitForReady" type="checkbox" />
-          Wait for physical nodes to become Ready in Kubernetes before powering on VMs
+          Wait for nodes to become Ready in Kubernetes before powering on VMs
         </label>
       </template>
 

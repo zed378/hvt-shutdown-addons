@@ -33,16 +33,16 @@ export default {
       const parts = [];
 
       if (this.value.nodeEnabled) {
-        parts.push('shutdown node on');
+        parts.push('node shutdown on');
       }
       if (this.value.vmEnabled) {
-        parts.push(`shutdown VMs (${ this.selectedCount })`);
+        parts.push(`VM shutdown on (${ this.selectedCount } selected)`);
       }
       if (this.value.poweronNodeEnabled) {
-        parts.push(`poweron IPMI on`);
+        parts.push('node power-on on');
       }
       if (this.value.poweronVmEnabled) {
-        parts.push(`poweron VMs (${ this.poweronSelectedCount })`);
+        parts.push(`VM power-on on (${ this.poweronSelectedCount } selected)`);
       }
       return parts.length ? parts.join(' | ') : 'schedules off';
     },
@@ -246,30 +246,27 @@ export default {
       <p class="text-muted mt-10">Stopped VMs stay off after the node powers back on unless scheduled to start.</p>
     </template>
 
-    <hr class="mt-20 mb-20" />
-    <h4 class="mt-10">⚡ Power-on (IPMI &amp; VMs)</h4>
-    <p class="text-muted mb-10">Configure wake-up schedule via IPMI over LAN and VM automatic startup.</p>
-
+    <h4 class="mt-20">Power-on</h4>
     <label class="checkbox">
       <input
         type="checkbox"
         :checked="value.poweronNodeEnabled"
         @change="update({ poweronNodeEnabled: $event.target.checked })"
       />
-      Power on this node on a schedule (via IPMI)
+      Power on this node on a schedule
     </label>
 
     <template v-if="value.poweronNodeEnabled">
-      <label class="label mt-10">BMC / IPMI IP Address</label>
+      <label class="label mt-10">BMC IP address</label>
       <input
         :value="value.bmcIp"
         type="text"
         spellcheck="false"
-        placeholder="e.g. 192.168.10.51"
+        placeholder="192.168.10.51"
         class="field"
         @input="update({ bmcIp: $event.target.value })"
       />
-      <p class="text-muted mt-5">Out-of-band management IP for this physical server.</p>
+      <p class="text-muted mt-5">IPMI / BMC IP address for this physical server.</p>
 
       <label class="label mt-10">Node power-on time</label>
       <select
