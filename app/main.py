@@ -48,6 +48,20 @@ ENABLE_DOCS = os.getenv("ENABLE_DOCS", "false").lower() == "true"
 _shutdown_lock = Lock()
 _shutdown_in_progress = False
 
+# Concurrent power-on protection - use Lock for atomic check-and-set
+_poweron_lock = Lock()
+_poweron_in_progress = False
+_poweron_status = {
+    "state": "idle",
+    "detail": "No power-on operation has been executed",
+    "timestamp": None,
+}
+
+# IPMI default credentials from environment or mounted Secret file
+IPMI_DEFAULT_USER = os.getenv("IPMI_DEFAULT_USER", "admin")
+IPMI_DEFAULT_PASSWORD = os.getenv("IPMI_DEFAULT_PASSWORD", "")
+IPMI_PASSWORD_FILE = os.getenv("IPMI_PASSWORD_FILE")
+
 # Kubernetes API client (initialized lazily)
 k8s_core = None
 
@@ -444,6 +458,235 @@ async def execute_shutdown(request: Request, all_nodes: str = None):
         "scope": "local" if is_peer_call else ("cluster" if not target_nodes else "selected"),
         "vmStrategy": vm_strategy,
         "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+def _current_ipmi_password() -> str:
+    """Return the active IPMI password, preferring the live Secret file if mounted."""
+    if IPMI_PASSWORD_FILE:
+        try:
+            with open(IPMI_PASSWORD_FILE, "r") as f:
+                val = f.read().strip()
+                if val:
+                    return val
+        except OSError:
+            pass
+    return IPMI_DEFAULT_PASSWORD
+
+
+def _run_ipmi_command(bmc_ip: str, user: str, password: str, subcmd: list[str]) -> tuple[bool, str]:
+    """Execute an ipmitool command against a target BMC using IPMI-over-LAN (lanplus)."""
+    cmd = ["ipmitool", "-I", "lanplus", "-H", bmc_ip, "-U", user, "-P", password] + subcmd
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+        if res.returncode == 0:
+            return True, res.stdout.strip()
+        err_msg = res.stderr.strip() or res.stdout.strip()
+        return False, err_msg
+    except Exception as e:
+        return False, str(e)
+
+
+def _poweron_node_ipmi(bmc_ip: str, user: str, password: str) -> bool:
+    """Send IPMI chassis power on command to a node's BMC."""
+    ok, out = _run_ipmi_command(bmc_ip, user, password, ["chassis", "power", "status"])
+    if ok and "is on" in out.lower():
+        logger.info(f"Node BMC {bmc_ip} is already powered on ({out})")
+        return True
+
+    logger.info(f"Sending IPMI chassis power on to BMC {bmc_ip}...")
+    ok, out = _run_ipmi_command(bmc_ip, user, password, ["chassis", "power", "on"])
+    if not ok:
+        logger.error(f"IPMI power on failed for BMC {bmc_ip}: {out}")
+        return False
+    logger.info(f"IPMI power on sent successfully to BMC {bmc_ip}: {out}")
+    return True
+
+
+def _wait_for_node_ready(node_name: str, timeout_seconds: int = 300) -> bool:
+    """Wait until a Kubernetes node transitions to Ready status."""
+    global k8s_core
+    if not k8s_core:
+        logger.warning(f"Kubernetes client not available; cannot poll node {node_name} readiness")
+        return False
+    logger.info(f"Waiting for node '{node_name}' to become Ready in Kubernetes (timeout {timeout_seconds}s)...")
+    start = time.time()
+    while time.time() - start < timeout_seconds:
+        try:
+            node = k8s_core.read_node_status(name=node_name)
+            for condition in (node.status.conditions or []):
+                if condition.type == "Ready" and condition.status == "True":
+                    logger.info(f"Node '{node_name}' is Ready in Kubernetes!")
+                    return True
+        except Exception as e:
+            logger.debug(f"Error reading node {node_name} status: {e}")
+        time.sleep(10)
+    logger.warning(f"Timed out waiting for node '{node_name}' to become Ready")
+    return False
+
+
+def _start_virtual_machines(vms: list[str]) -> int:
+    """Start target KubeVirt VirtualMachines by patching them to running/Always."""
+    if not vms:
+        return 0
+    custom = client.CustomObjectsApi()
+    started = 0
+    logger.info(f"Starting {len(vms)} VirtualMachine(s)...")
+    for vm_ref in vms:
+        parts = vm_ref.split("/", 1)
+        if len(parts) == 2:
+            ns, name = parts
+        else:
+            ns, name = "default", parts[0]
+        try:
+            vm = custom.get_namespaced_custom_object("kubevirt.io", "v1", ns, "virtualmachines", name)
+            spec = vm.get("spec", {})
+            if "runStrategy" in spec:
+                patch = {"spec": {"runStrategy": "Always"}}
+            else:
+                patch = {"spec": {"running": True}}
+            custom.patch_namespaced_custom_object("kubevirt.io", "v1", ns, "virtualmachines", name, patch)
+            logger.info(f"Successfully started VirtualMachine {ns}/{name}")
+            started += 1
+        except Exception as e:
+            logger.error(f"Failed to start VirtualMachine {ns}/{name}: {e}")
+    return started
+
+
+def run_poweron_sequence(
+    target_nodes: list[str],
+    target_vms: list[str],
+    node_bmc_map: dict,
+    default_user: str,
+    default_pass: str,
+    wait_for_ready: bool = True,
+    timeout_seconds: int = 300,
+):
+    """Background thread executing the full IPMI node wake-up and VM start sequence."""
+    global _poweron_in_progress, _poweron_status
+    try:
+        _poweron_status = {
+            "state": "running",
+            "detail": f"Powering on {len(target_nodes)} node(s) via IPMI",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        # 1. Baremetal power-on via IPMI
+        powered_nodes = []
+        for node in target_nodes:
+            bmc_info = node_bmc_map.get(node, {})
+            bmc_ip = bmc_info.get("bmcIp") or bmc_info.get("ip")
+            user = bmc_info.get("user") or default_user
+            pwd = bmc_info.get("password") or default_pass
+            if not bmc_ip:
+                logger.warning(f"No BMC IP configured for node '{node}', skipping IPMI power-on")
+                continue
+            logger.info(f"Triggering IPMI power-on for node '{node}' at BMC {bmc_ip}")
+            if _poweron_node_ipmi(bmc_ip, user, pwd):
+                powered_nodes.append(node)
+
+        # 2. Wait for powered-on nodes to become Ready
+        if wait_for_ready and powered_nodes:
+            _poweron_status["detail"] = f"Waiting for node(s) {powered_nodes} to become Ready"
+            for node in powered_nodes:
+                _wait_for_node_ready(node, timeout_seconds=timeout_seconds)
+
+        # 3. Start target VMs
+        if target_vms:
+            _poweron_status["detail"] = f"Powering on {len(target_vms)} target VirtualMachine(s)"
+            started_count = _start_virtual_machines(target_vms)
+            logger.info(f"Power-on sequence started {started_count} VirtualMachine(s)")
+
+        _poweron_status = {
+            "state": "completed",
+            "detail": f"Power-on sequence finished (nodes: {len(powered_nodes)}, vms: {len(target_vms)})",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Power-on sequence failed: {e}")
+        _poweron_status = {
+            "state": "error",
+            "detail": str(e),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    finally:
+        with _poweron_lock:
+            _poweron_in_progress = False
+
+
+@app.get("/system/poweron/status", dependencies=[Depends(verify_token)])
+async def get_poweron_status():
+    """Return the current status of power-on operations."""
+    return {
+        "inProgress": _poweron_in_progress,
+        "status": _poweron_status,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.post("/system/poweron", dependencies=[Depends(verify_token)])
+async def execute_poweron(request: Request):
+    """Execute coordinated power-on for baremetal nodes (via IPMI) and VMs.
+
+    JSON body:
+    {
+      "nodes": ["worker-1"],
+      "vms": ["default/vm1"],
+      "nodeBmc": {"worker-1": {"bmcIp": "192.168.1.51"}},
+      "ipmiUser": "admin",
+      "ipmiPassword": "...",
+      "waitForReady": true,
+      "timeoutSeconds": 300
+    }
+    """
+    global _poweron_in_progress
+
+    if not rate_limiter.is_allowed(_client_ip(request)):
+        logger.warning("Rate limit exceeded for authenticated poweron request")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Try again later.",
+        )
+
+    with _poweron_lock:
+        if _poweron_in_progress:
+            logger.warning("Power-on already in progress, ignoring duplicate request")
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={"detail": "Power-on sequence already in progress"},
+            )
+        _poweron_in_progress = True
+
+    req_body = {}
+    try:
+        raw = await request.body()
+        if raw:
+            req_body = json.loads(raw)
+    except Exception:
+        req_body = {}
+
+    target_nodes = req_body.get("nodes") or []
+    target_vms = req_body.get("vms") or []
+    node_bmc_map = req_body.get("nodeBmc") or {}
+    default_user = req_body.get("ipmiUser") or IPMI_DEFAULT_USER
+    default_pass = req_body.get("ipmiPassword") or _current_ipmi_password()
+    wait_for_ready = req_body.get("waitForReady", True)
+    timeout_seconds = int(req_body.get("timeoutSeconds", 300))
+
+    logger.info(f"Power-on initiated: nodes={target_nodes}, vms={target_vms}")
+    thread = threading.Thread(
+        target=run_poweron_sequence,
+        args=(target_nodes, target_vms, node_bmc_map, default_user, default_pass, wait_for_ready, timeout_seconds),
+        daemon=True,
+        name="poweron-daemon",
+    )
+    thread.start()
+
+    return {
+        "status": "Power-on sequence initiated",
+        "nodes": target_nodes,
+        "vms": target_vms,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

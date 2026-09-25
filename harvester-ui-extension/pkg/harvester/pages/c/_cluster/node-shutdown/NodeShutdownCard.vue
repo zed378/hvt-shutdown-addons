@@ -26,25 +26,51 @@ export default {
     selectedCount() {
       return (this.value.vms || []).length;
     },
+    poweronSelectedCount() {
+      return (this.value.poweronVms || []).length;
+    },
     statusText() {
       const parts = [];
 
       if (this.value.nodeEnabled) {
-        parts.push('node schedule on');
+        parts.push('shutdown node on');
       }
       if (this.value.vmEnabled) {
-        parts.push(`VM schedule on (${ this.selectedCount } selected)`);
+        parts.push(`shutdown VMs (${ this.selectedCount })`);
+      }
+      if (this.value.poweronNodeEnabled) {
+        parts.push(`poweron IPMI on`);
+      }
+      if (this.value.poweronVmEnabled) {
+        parts.push(`poweron VMs (${ this.poweronSelectedCount })`);
       }
       return parts.length ? parts.join(' | ') : 'schedules off';
     },
     startOpen() {
-      return !!(this.value.nodeEnabled || this.value.vmEnabled);
+      return !!(this.value.nodeEnabled || this.value.vmEnabled || this.value.poweronNodeEnabled || this.value.poweronVmEnabled);
     },
   },
 
   methods: {
     update(patch) {
       this.$emit('input', { ...this.value, ...patch });
+    },
+    togglePoweronVm(key) {
+      const vms = [...(this.value.poweronVms || [])];
+      const i = vms.indexOf(key);
+
+      if (i >= 0) {
+        vms.splice(i, 1);
+      } else {
+        vms.push(key);
+      }
+      this.update({ poweronVms: vms });
+    },
+    selectAllPoweron() {
+      this.update({ poweronVms: [...this.vmOptions] });
+    },
+    clearAllPoweron() {
+      this.update({ poweronVms: [] });
     },
     cronPresets() {
       return CRON_PRESETS;
@@ -217,7 +243,130 @@ export default {
         v-else
         class="text-muted mt-10"
       >No VMs found on this node, or the list could not be loaded. Saving with nothing checked targets all VMs on this node.</p>
-      <p class="text-muted mt-10">Stopped VMs stay off after the node powers back on. Start them again from the Harvester UI.</p>
+      <p class="text-muted mt-10">Stopped VMs stay off after the node powers back on unless scheduled to start.</p>
+    </template>
+
+    <hr class="mt-20 mb-20" />
+    <h4 class="mt-10">⚡ Power-on (IPMI &amp; VMs)</h4>
+    <p class="text-muted mb-10">Configure wake-up schedule via IPMI over LAN and VM automatic startup.</p>
+
+    <label class="checkbox">
+      <input
+        type="checkbox"
+        :checked="value.poweronNodeEnabled"
+        @change="update({ poweronNodeEnabled: $event.target.checked })"
+      />
+      Power on this node on a schedule (via IPMI)
+    </label>
+
+    <template v-if="value.poweronNodeEnabled">
+      <label class="label mt-10">BMC / IPMI IP Address</label>
+      <input
+        :value="value.bmcIp"
+        type="text"
+        spellcheck="false"
+        placeholder="e.g. 192.168.10.51"
+        class="field"
+        @input="update({ bmcIp: $event.target.value })"
+      />
+      <p class="text-muted mt-5">Out-of-band management IP for this physical server.</p>
+
+      <label class="label mt-10">Node power-on time</label>
+      <select
+        :value="cronPreset(value.poweronNodeCron)"
+        class="field"
+        @change="onPreset('poweronNodeCron', $event.target.value)"
+      >
+        <option
+          v-for="p in cronPresets()"
+          :key="p.value"
+          :value="p.value"
+        >{{ p.label }}</option>
+        <option value="custom">Custom schedule...</option>
+      </select>
+      <input
+        v-if="cronPreset(value.poweronNodeCron) === 'custom'"
+        :value="value.poweronNodeCron"
+        type="text"
+        spellcheck="false"
+        placeholder="0 6 * * 1-5"
+        class="field mt-10"
+        @input="update({ poweronNodeCron: $event.target.value })"
+      />
+      <p class="text-muted mt-5">{{ presetSummary(value.poweronNodeCron) }}</p>
+    </template>
+
+    <h4 class="mt-15">Power-on virtual machines</h4>
+    <label class="checkbox">
+      <input
+        type="checkbox"
+        :checked="value.poweronVmEnabled"
+        @change="update({ poweronVmEnabled: $event.target.checked })"
+      />
+      Start selected VMs on a schedule
+    </label>
+
+    <template v-if="value.poweronVmEnabled">
+      <label class="label mt-10">VM power-on time (starts automatically after node is Ready)</label>
+      <select
+        :value="cronPreset(value.poweronVmCron)"
+        class="field"
+        @change="onPreset('poweronVmCron', $event.target.value)"
+      >
+        <option
+          v-for="p in cronPresets()"
+          :key="p.value"
+          :value="p.value"
+        >{{ p.label }}</option>
+        <option value="custom">Custom schedule...</option>
+      </select>
+      <input
+        v-if="cronPreset(value.poweronVmCron) === 'custom'"
+        :value="value.poweronVmCron"
+        type="text"
+        spellcheck="false"
+        placeholder="0 6 * * 1-5"
+        class="field mt-10"
+        @input="update({ poweronVmCron: $event.target.value })"
+      />
+      <p class="text-muted mt-5">{{ presetSummary(value.poweronVmCron) }}</p>
+
+      <div class="row mt-10">
+        <button
+          type="button"
+          class="btn role-secondary"
+          :disabled="!vmOptions.length"
+          @click="selectAllPoweron"
+        >Select all</button>
+        <button
+          type="button"
+          class="btn role-secondary"
+          :disabled="!poweronSelectedCount"
+          @click="clearAllPoweron"
+        >Clear</button>
+        <span class="text-muted">{{ poweronSelectedCount }} of {{ vmOptions.length }} selected.</span>
+      </div>
+      <div
+        v-if="vmOptions.length"
+        class="nodes mt-10"
+      >
+        <label
+          v-for="vm in vmOptions"
+          :key="vm"
+          class="checkbox"
+        >
+          <input
+            type="checkbox"
+            :checked="(value.poweronVms || []).includes(vm)"
+            @change="togglePoweronVm(vm)"
+          />
+          {{ vm }}
+        </label>
+      </div>
+      <p
+        v-else
+        class="text-muted mt-10"
+      >No VMs found on this node. Saving with nothing checked targets all VMs on this node.</p>
     </template>
     </details>
   </div>

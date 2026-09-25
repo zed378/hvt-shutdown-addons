@@ -59,6 +59,10 @@ rbac:
     - apiGroups: [""]
       resources: ["pods"]
       verbs: ["get", "list", "delete"]
+    # Read node status to monitor Ready condition after IPMI power-on
+    - apiGroups: [""]
+      resources: ["nodes"]
+      verbs: ["get", "list", "watch"]
 
 secret:
   name: "node-shutdown-auth"
@@ -182,6 +186,29 @@ schedule:
 # node. Inert until the CronJob template ranges over it; the legacy `schedule`
 # block above keeps working unchanged.
 nodeSchedules: []
+
+# Scheduled power-on — an in-cluster CronJob that wakes up physical nodes via IPMI
+# and boots target VirtualMachines once the physical nodes are Ready.
+poweronSchedule:
+  enabled: false
+  nodeCron: "0 6 * * 1-5" # Daily/weekday time to wake up physical nodes via IPMI
+  vmCron: "0 6 * * 1-5"   # Daily/weekday time to start target VirtualMachines
+  nodes: []               # Target nodes to power on via IPMI (empty = all configured in nodeBmc)
+  vms: []                 # Target VMs to start (empty = start all VMs configured per-node)
+  waitForReady: true      # Wait for Kubernetes node status Ready before starting VMs
+  timeoutSeconds: 300     # Maximum seconds to wait for node boot
+
+# IPMI credentials for baremetal power-on
+ipmi:
+  user: "admin"
+  password: "" # Base64-encoded or stored in Secret
+  secretName: "node-poweron-ipmi"
+
+# Mapping of Harvester node name to its physical BMC/IPMI IP address
+# Example:
+#   harvester-worker-1:
+#     bmcIp: "192.168.10.51"
+nodeBmc: {}
 
 # Network policy (optional - restricts incoming traffic to the API port).
 # IMPORTANT: this DaemonSet uses hostNetwork: true. Kubernetes NetworkPolicy

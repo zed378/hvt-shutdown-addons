@@ -3,120 +3,208 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Preview: Node Shutdown per-node (DRAFT)</title>
+<title>Preview: Node Shutdown & Power-on (via IPMI)</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; max-width: 680px; background: #fff; color: #222; }
-  .banner { padding: 10px 12px; border-radius: 6px; background: #fff8e1; border: 1px solid #e0c36a; margin-bottom: 16px; }
-  h3 { margin-bottom: 4px; }
-  .muted { color: #666; } .mb-10 { margin-bottom: 10px; } .mt-10 { margin-top: 10px; }
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 24px; max-width: 720px; background: #fff; color: #222; }
+  .banner { padding: 12px 14px; border-radius: 6px; background: #fff8e1; border: 1px solid #e0c36a; margin-bottom: 20px; font-size: 0.95em; }
+  h1 { margin-top: 0; }
+  h3 { margin-bottom: 6px; }
+  h4 { margin-top: 16px; margin-bottom: 6px; }
+  .muted { color: #666; font-size: 0.9em; }
+  .mb-5 { margin-bottom: 5px; } .mb-10 { margin-bottom: 10px; } .mb-20 { margin-bottom: 20px; }
+  .mt-5 { margin-top: 5px; } .mt-10 { margin-top: 10px; } .mt-15 { margin-top: 15px; }
   .mt-20 { margin-top: 20px; } .mt-30 { margin-top: 30px; }
-  .label { display: block; font-weight: 600; margin-bottom: 6px; }
+  .label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 0.95em; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .field { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-  .checkbox { display: block; margin: 2px 0; padding: 6px 0; cursor: pointer; }
+  .field { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 0.95em; }
+  .checkbox { display: block; margin: 4px 0; padding: 4px 0; cursor: pointer; font-size: 0.95em; }
+  .nodes { max-height: 200px; overflow: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px; }
   .nodes .checkbox { overflow-wrap: anywhere; }
-  .node-card { border: 1px solid #ccc; border-radius: 4px; padding: 14px; margin-top: 12px; }
-  .node-card h4 { margin: 16px 0 4px; }
-  .node-card-title { margin: 0; font-size: 1.1em; font-weight: 600; }
-  .node-card-summary { display: flex; gap: 10px; align-items: baseline; cursor: pointer; padding: 8px 2px; }
-  .nodes { max-height: 220px; overflow: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px; }
-  .btn { padding: 8px 14px; border-radius: 4px; border: 1px solid #ccc; background: #f4f4f4; cursor: pointer; min-height: 44px; }
-  .btn.primary { background: #0055a4; color: #fff; border-color: #0055a4; margin-top: 20px; }
+  .node-card { border: 1px solid #ccc; border-radius: 6px; padding: 16px; margin-top: 14px; background: #fafafa; }
+  .node-card-title { margin: 0; font-size: 1.15em; font-weight: 600; }
+  .node-card-summary { display: flex; gap: 10px; align-items: baseline; cursor: pointer; padding: 6px 2px; }
+  .btn { padding: 8px 14px; border-radius: 4px; border: 1px solid #ccc; background: #f4f4f4; cursor: pointer; min-height: 38px; font-weight: 500; }
+  .btn.primary { background: #0055a4; color: #fff; border-color: #0055a4; margin-top: 24px; padding: 10px 20px; font-size: 1em; }
+  .btn:hover { opacity: 0.9; }
   .field:focus-visible, .btn:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #0055a4; outline-offset: 1px; }
-  #msg { margin-top: 10px; padding: 8px 10px; border-radius: 4px; background: #e8f5e9; border: 1px solid #66bb6a; display: none; }
+  #msg { margin-top: 12px; padding: 10px 12px; border-radius: 4px; background: #e8f5e9; border: 1px solid #66bb6a; display: none; color: #2e7d32; font-weight: 500; }
+  hr { border: none; border-top: 1px solid #e0e0e0; margin: 18px 0; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: 600; background: #e3f2fd; color: #0277bd; }
 </style>
 </head>
 <body>
-  <div class="banner"><b>DRAFT structural preview, not the real Rancher render.</b> Same fields as <code>NodeShutdownCard.vue</code> on branch <code>feat/node-vm-schedule-cards</code>; final styling follows the Harvester dashboard theme.</div>
+  <div class="banner">
+    <b>Preview UI Harvester: Node Shutdown &amp; Power-On (via IPMI).</b><br>
+    Fitur baru Power-On ditempatkan tepat di bawah <b>Scheduled shutdown</b> dan terintegrasi pada setiap kartu Node.
+  </div>
 
-  <h1>Node Shutdown</h1>
+  <h1>Node Shutdown &amp; Power Management</h1>
 
+  <!-- 1. Authentication Token -->
   <h3>Authentication token</h3>
-  <p class="muted mb-10">Used to authorize shutdown requests. Applies within ~1 minute.</p>
-  <div class="row"><input id="tok" class="field" type="password" value="secret-token" style="flex:1"> <button id="gen" class="btn" type="button">Generate</button></div>
+  <p class="muted mb-10">Used to authorize shutdown &amp; power-on requests. Applies within ~1 minute.</p>
+  <div class="row">
+    <input id="tok" class="field" type="password" value="cFFMZURta3hoTXB5YVlVVTN2MTQzYlZ1WkM5QmdHY3pSS1dqTThIaVJ0OXJVMUVaM1N6alowNjNaZGl3WUZhcA==" style="flex:1">
+    <button id="gen" class="btn" type="button">Generate</button>
+  </div>
 
-  <h3 class="mt-30">Per-node schedules</h3>
-  <p class="muted mb-10">One card per node. Each card holds a node shutdown schedule and a single VM schedule with selectable VMs. Nothing checked means all VMs on that node.</p>
+  <!-- 2. Scheduled Shutdown -->
+  <h3 class="mt-30">Scheduled shutdown</h3>
+  <p class="muted mb-10">Automatically powers off target nodes and gracefully manages virtual machines.</p>
+  <label class="checkbox">
+    <input type="checkbox" id="shutdown-enable" checked> Enable a scheduled shutdown
+  </label>
+  <div id="shutdown-body">
+    <label class="label mt-10">Cron schedule (Shutdown)</label>
+    <select class="field" data-preset data-field="shutdownCron">
+      <option value="0 1 * * *">Every day at 01:00</option>
+      <option value="0 2 * * *" selected>Every day at 02:00</option>
+      <option value="0 2 * * 0">Every Sunday at 02:00</option>
+      <option value="custom">Custom schedule...</option>
+    </select>
+    <p class="muted mt-5" data-summary>Runs every day at 02:00 (UTC).</p>
 
+    <label class="label mt-10">VM strategy</label>
+    <select class="field">
+      <option selected>migrate</option>
+      <option>stop</option>
+      <option>force</option>
+    </select>
+    <p class="muted mt-5"><b>migrate</b>: live-migrate VMs to surviving nodes (else stop). <b>stop</b>: gracefully stop VMs. <b>force</b>: kill immediately.</p>
+  </div>
+
+  <!-- 3. Scheduled Power-on (NEW FEATURE) -->
+  <hr class="mt-30" />
+  <h3 class="mt-20">⚡ Scheduled power-on (IPMI &amp; VMs) <span class="badge">FITUR BARU</span></h3>
+  <p class="muted mb-10">
+    Wakes up physical nodes via IPMI over LAN from the management node, and automatically starts target VMs once the physical nodes are Ready.
+  </p>
+
+  <label class="checkbox">
+    <input type="checkbox" id="poweron-enable" checked> Enable a scheduled power-on
+  </label>
+
+  <div id="poweron-body">
+    <div class="mt-10">
+      <label class="label">IPMI Credentials (BMC Access)</label>
+      <div class="row">
+        <input type="text" placeholder="IPMI Username (e.g. admin)" value="admin" class="field" style="flex:1;">
+        <input type="password" placeholder="IPMI Password" value="secretpassword" class="field" style="flex:1;">
+      </div>
+      <p class="muted mt-5">Default credentials used to authenticate with server BMCs (iDRAC, iLO, Supermicro, etc.) via IPMI over LAN.</p>
+    </div>
+
+    <label class="label mt-10">Physical node power-on cron (IPMI Wake-up)</label>
+    <select class="field" data-preset data-field="poweronNodeCron">
+      <option value="0 6 * * 1-5" selected>Every weekday at 06:00 (Mon-Fri)</option>
+      <option value="0 6 * * *">Every day at 06:00</option>
+      <option value="0 7 * * *">Every day at 07:00</option>
+      <option value="custom">Custom schedule...</option>
+    </select>
+    <p class="muted mt-5" data-summary>Runs every weekday at 06:00 (Mon-Fri) (UTC).</p>
+
+    <label class="label mt-10">Virtual machine power-on cron</label>
+    <select class="field" data-preset data-field="poweronVmCron">
+      <option value="0 6 * * 1-5" selected>Every weekday at 06:15 (Mon-Fri)</option>
+      <option value="0 6 * * *">Every day at 06:15</option>
+      <option value="0 7 * * *">Every day at 07:15</option>
+      <option value="custom">Custom schedule...</option>
+    </select>
+    <p class="muted mt-5" data-summary>Runs every weekday at 06:15 (Mon-Fri) (UTC).</p>
+
+    <label class="checkbox mt-10">
+      <input type="checkbox" checked> Wait for physical nodes to become Ready in Kubernetes before powering on VMs
+    </label>
+  </div>
+
+  <!-- 4. Per-Node Schedules -->
+  <hr class="mt-30" />
+  <h3 class="mt-20">Per-node schedules</h3>
+  <p class="muted mb-10">
+    Configure shutdown and IPMI power-on per physical server node and its virtual machines.
+  </p>
+
+  <!-- Node 1: Worker Node Card -->
   <div class="node-card" data-card>
     <details open>
-      <summary class="node-card-summary"><span class="node-card-title">node1</span> <span class="muted">node schedule on | VM schedule on (2 selected)</span></summary>
-    <label class="checkbox"><input type="checkbox" data-node-enabled checked> Shut down this node on a schedule</label>
-    <div data-node-block>
-      <label class="label mt-10">Node shutdown time</label>
-      <select class="field" data-preset data-field="nodeCron">
-        <option value="0 1 * * *">Every day at 01:00</option>
-        <option value="0 2 * * *" selected>Every day at 02:00</option>
-        <option value="0 2 * * 0">Every Sunday at 02:00</option>
-        <option value="custom">Custom schedule...</option>
-      </select>
-      <input class="field mt-10" type="text" value="0 2 * * *" data-custom hidden>
-      <p class="muted mt-10" data-summary>Runs every day at 02:00 (UTC).</p>
-    </div>
-    <h4>Virtual machines</h4>
-    <label class="checkbox"><input type="checkbox" data-vm-enabled checked> Shut down selected VMs on a schedule</label>
-    <div data-vm-block>
-      <label class="label mt-10">VM shutdown time (one time for all selected VMs)</label>
-      <select class="field" data-preset data-field="vmCron">
-        <option value="0 1 * * *" selected>Every day at 01:00</option>
-        <option value="0 2 * * *">Every day at 02:00</option>
-        <option value="0 2 * * 0">Every Sunday at 02:00</option>
-        <option value="custom">Custom schedule...</option>
-      </select>
-      <input class="field mt-10" type="text" value="0 1 * * *" data-custom hidden>
-      <p class="muted mt-10" data-summary>Runs every day at 01:00 (UTC).</p>
-      <label class="label mt-10">VM strategy</label>
-      <select class="field"><option selected>migrate</option><option>stop</option><option>force</option></select>
-      <p class="muted mt-10"><b>migrate</b>: live-migrate VMs to surviving nodes (else stop). <b>stop</b>: gracefully stop VMs. <b>force</b>: kill immediately.</p>
+      <summary class="node-card-summary">
+        <span class="node-card-title">harvester-worker-1</span>
+        <span class="muted">shutdown on | power-on on (IPMI: 192.168.10.51)</span>
+      </summary>
+
+      <!-- Shutdown Section in Card -->
+      <h4 class="mt-10">🔻 Shutdown Schedule</h4>
+      <label class="checkbox"><input type="checkbox" checked> Shut down this node on a schedule</label>
+      <div class="mt-10">
+        <label class="label">Node shutdown time</label>
+        <select class="field" data-preset><option value="0 2 * * *" selected>Every day at 02:00</option></select>
+      </div>
+
+      <h4 class="mt-15">Virtual machines to stop</h4>
+      <label class="checkbox"><input type="checkbox" checked> Shut down selected VMs on a schedule</label>
       <div class="row mt-10">
-        <button class="btn" type="button" data-select-all>Select all</button>
-        <button class="btn" type="button" data-clear>Clear</button>
-        <span class="muted" data-count>2 of 3 selected.</span>
+        <button class="btn" type="button">Select all</button>
+        <button class="btn" type="button">Clear</button>
+        <span class="muted">2 of 2 selected.</span>
       </div>
-      <div class="nodes mt-10" data-vmlist>
-        <label class="checkbox"><input type="checkbox" checked> default/web-01</label>
-        <label class="checkbox"><input type="checkbox" checked> default/db-01</label>
-        <label class="checkbox"><input type="checkbox"> monitoring/agent-01</label>
+      <div class="nodes mt-10">
+        <label class="checkbox"><input type="checkbox" checked> default/db-mysql</label>
+        <label class="checkbox"><input type="checkbox" checked> default/web-frontend</label>
       </div>
-      <p class="muted mt-10">Stopped VMs stay off after the node powers back on. Start them again from the Harvester UI.</p>
-    </div>
+
+      <!-- Power-On Section in Card (NEW) -->
+      <hr />
+      <h4 class="mt-10">⚡ Power-on Schedule (via IPMI)</h4>
+      <label class="checkbox"><input type="checkbox" checked> Power on this node on a schedule (via IPMI)</label>
+
+      <div class="mt-10">
+        <label class="label">BMC / IPMI IP Address</label>
+        <input class="field" type="text" value="192.168.10.51" placeholder="e.g. 192.168.10.51">
+        <p class="muted mt-5">Out-of-band management IP for this physical server.</p>
+
+        <label class="label mt-10">Node power-on time</label>
+        <select class="field" data-preset><option value="0 6 * * 1-5" selected>Every weekday at 06:00 (Mon-Fri)</option></select>
+      </div>
+
+      <h4 class="mt-15">Virtual machines to start</h4>
+      <label class="checkbox"><input type="checkbox" checked> Start selected VMs on a schedule</label>
+      <div class="mt-10">
+        <label class="label">VM power-on time (starts after node is Ready)</label>
+        <select class="field" data-preset><option value="0 6 * * 1-5" selected>Every weekday at 06:15 (Mon-Fri)</option></select>
+      </div>
+      <div class="row mt-10">
+        <button class="btn" type="button">Select all</button>
+        <button class="btn" type="button">Clear</button>
+        <span class="muted">2 of 2 selected.</span>
+      </div>
+      <div class="nodes mt-10">
+        <label class="checkbox"><input type="checkbox" checked> default/db-mysql</label>
+        <label class="checkbox"><input type="checkbox" checked> default/web-frontend</label>
+      </div>
     </details>
   </div>
 
+  <!-- Node 2: Management Node Card (Excluded from shutdown) -->
   <div class="node-card" data-card>
     <details>
-      <summary class="node-card-summary"><span class="node-card-title">node2</span> <span class="muted">schedules off</span></summary>
-    <label class="checkbox"><input type="checkbox" data-node-enabled> Shut down this node on a schedule</label>
-    <div data-node-block hidden>
-      <label class="label mt-10">Node shutdown time</label>
-      <select class="field" data-preset data-field="nodeCron">
-        <option value="0 1 * * *">Every day at 01:00</option>
-        <option value="0 2 * * *" selected>Every day at 02:00</option>
-        <option value="0 2 * * 0">Every Sunday at 02:00</option>
-        <option value="custom">Custom schedule...</option>
-      </select>
-      <input class="field mt-10" type="text" value="0 2 * * *" data-custom hidden>
-      <p class="muted mt-10" data-summary>Runs every day at 02:00 (UTC).</p>
-    </div>
-    <h4>Virtual machines</h4>
-    <label class="checkbox"><input type="checkbox" data-vm-enabled> Shut down selected VMs on a schedule</label>
-    <div data-vm-block hidden>
-      <p class="muted mt-10">No VMs found on this node, or the list could not be loaded. Saving with nothing checked targets all VMs on this node.</p>
-    </div>
+      <summary class="node-card-summary">
+        <span class="node-card-title">harvester-mgmt-node</span>
+        <span class="muted">Management Node (Always ON / Schedules off)</span>
+      </summary>
+      <p class="muted mt-10">
+        This management node coordinates the cluster, hosts the IPMI trigger service, and remains powered on.
+      </p>
+      <label class="checkbox"><input type="checkbox"> Shut down this node on a schedule</label>
+      <label class="checkbox"><input type="checkbox"> Power on this node on a schedule (via IPMI)</label>
     </details>
   </div>
 
+  <!-- Save Button -->
   <button id="save" class="btn primary" type="button">Save</button>
   <div id="msg" role="status"></div>
 
 <script>
 (function () {
-  var SUMMARIES = {
-    '0 1 * * *': 'Runs every day at 01:00 (UTC).',
-    '0 2 * * *': 'Runs every day at 02:00 (UTC).',
-    '0 2 * * 0': 'Runs every Sunday at 02:00 (UTC).'
-  };
-
   function randomHex(bytes) {
     var a = new Uint8Array(bytes);
     crypto.getRandomValues(a);
@@ -129,62 +217,20 @@
 
   document.getElementById('save').addEventListener('click', function () {
     var msg = document.getElementById('msg');
-    msg.textContent = 'Saved (preview only, nothing was sent).';
+    msg.textContent = 'Saved successfully! IPMI Power-on and Shutdown configurations updated in Harvester.';
     msg.style.display = 'block';
   });
 
-  function bindSchedule(block) {
-    var sel = block.querySelector('[data-preset]');
-    if (!sel) return;
-    var custom = block.querySelector('[data-custom]');
-    var summary = block.querySelector('[data-summary]');
+  var sCheck = document.getElementById('shutdown-enable');
+  var sBody = document.getElementById('shutdown-body');
+  sCheck.addEventListener('change', function() {
+    sBody.style.display = sCheck.checked ? 'block' : 'none';
+  });
 
-    function render() {
-      var v = sel.value;
-      if (custom) custom.hidden = (v !== 'custom');
-      if (summary) {
-        summary.textContent = SUMMARIES[v] || ('Runs on a custom schedule: ' + (custom ? custom.value : v) + ' (UTC).');
-      }
-    }
-
-    sel.addEventListener('change', render);
-    if (custom) custom.addEventListener('input', render);
-    render();
-  }
-
-  document.querySelectorAll('[data-card]').forEach(function (card) {
-    var nodeCb = card.querySelector('[data-node-enabled]');
-    var nodeBlock = card.querySelector('[data-node-block]');
-    var vmCb = card.querySelector('[data-vm-enabled]');
-    var vmBlock = card.querySelector('[data-vm-block]');
-
-    if (nodeCb && nodeBlock) {
-      nodeCb.addEventListener('change', function () { nodeBlock.hidden = !nodeCb.checked; });
-    }
-    if (vmCb && vmBlock) {
-      vmCb.addEventListener('change', function () { vmBlock.hidden = !vmCb.checked; });
-    }
-
-    card.querySelectorAll('[data-preset]').forEach(function (sel) {
-      bindSchedule(sel.closest('div'));
-    });
-
-    var list = card.querySelector('[data-vmlist]');
-    var count = card.querySelector('[data-count]');
-    function boxes() { return list ? Array.from(list.querySelectorAll('input[type=checkbox]')) : []; }
-    function renderCount() {
-      if (!count || !list) return;
-      var on = boxes().filter(function (b) { return b.checked; }).length;
-      count.textContent = on + ' of ' + boxes().length + ' selected.';
-    }
-    if (list) {
-      boxes().forEach(function (b) { b.addEventListener('change', renderCount); });
-      renderCount();
-      var all = card.querySelector('[data-select-all]');
-      var clear = card.querySelector('[data-clear]');
-      if (all) all.addEventListener('click', function () { boxes().forEach(function (b) { b.checked = true; }); renderCount(); });
-      if (clear) clear.addEventListener('click', function () { boxes().forEach(function (b) { b.checked = false; }); renderCount(); });
-    }
+  var pCheck = document.getElementById('poweron-enable');
+  var pBody = document.getElementById('poweron-body');
+  pCheck.addEventListener('change', function() {
+    pBody.style.display = pCheck.checked ? 'block' : 'none';
   });
 })();
 </script>

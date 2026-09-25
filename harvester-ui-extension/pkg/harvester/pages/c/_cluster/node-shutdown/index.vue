@@ -10,12 +10,18 @@ const VMI_TYPE = 'kubevirt.io.virtualmachineinstance';
 function defaultCard(node) {
   return {
     node,
-    nodeEnabled: false,
-    nodeCron:    '0 2 * * *',
-    vmEnabled:   false,
-    vmCron:      '0 1 * * *',
-    vmStrategy:  'migrate',
-    vms:         [],
+    nodeEnabled:        false,
+    nodeCron:           '0 2 * * *',
+    vmEnabled:          false,
+    vmCron:             '0 1 * * *',
+    vmStrategy:         'migrate',
+    vms:                [],
+    poweronNodeEnabled: false,
+    bmcIp:              '',
+    poweronNodeCron:    '0 6 * * 1-5',
+    poweronVmEnabled:   false,
+    poweronVmCron:      '0 6 * * 1-5',
+    poweronVms:         [],
   };
 }
 
@@ -26,19 +32,30 @@ export default {
 
   data() {
     return {
-      addon:       null,
-      token:       '',
-      schedule:    { enabled: false, cron: '0 2 * * *', nodes: [], vmStrategy: 'migrate' },
-      nodeCards:   [],
-      vmisByNode:  {},
-      nodeOptions: [],
-      strategies:  STRATEGIES,
-      saving:      false,
-      saved:       false,
-      saveError:   '',
-      loadError:   '',
-      vmLoadError: '',
-      loading:     true,
+      addon:           null,
+      token:           '',
+      schedule:        { enabled: false, cron: '0 2 * * *', nodes: [], vmStrategy: 'migrate' },
+      poweronSchedule: {
+        enabled:        false,
+        nodeCron:       '0 6 * * 1-5',
+        vmCron:         '0 6 * * 1-5',
+        nodes:          [],
+        vms:            [],
+        waitForReady:   true,
+        timeoutSeconds: 300,
+      },
+      ipmiUser:     'admin',
+      ipmiPassword: '',
+      nodeCards:    [],
+      vmisByNode:   {},
+      nodeOptions:  [],
+      strategies:   STRATEGIES,
+      saving:       false,
+      saved:        false,
+      saveError:    '',
+      loadError:    '',
+      vmLoadError:  '',
+      loading:      true,
     };
   },
 
@@ -56,6 +73,21 @@ export default {
         nodes:      Array.isArray(s.nodes) ? s.nodes : [],
         vmStrategy: STRATEGIES.includes(s.vmStrategy) ? s.vmStrategy : 'migrate',
       };
+
+      const p = parsed?.poweronSchedule || {};
+
+      this.poweronSchedule = {
+        enabled:        !!p.enabled,
+        nodeCron:       p.nodeCron || '0 6 * * 1-5',
+        vmCron:         p.vmCron || '0 6 * * 1-5',
+        nodes:          Array.isArray(p.nodes) ? p.nodes : [],
+        vms:            Array.isArray(p.vms) ? p.vms : [],
+        waitForReady:   p.waitForReady !== false,
+        timeoutSeconds: p.timeoutSeconds || 300,
+      };
+      this.ipmiUser = parsed?.ipmi?.user || 'admin';
+      this.ipmiPassword = parsed?.ipmi?.password || '';
+
       this._savedNodeSchedules = Array.isArray(parsed?.nodeSchedules) ? parsed.nodeSchedules : [];
     } catch (e) {
       this.loadError = e?.message || String(e);
@@ -146,14 +178,40 @@ export default {
           nodes:      this.schedule.nodes,
           vmStrategy: this.schedule.vmStrategy,
         };
+        parsed.poweronSchedule = {
+          enabled:        this.poweronSchedule.enabled,
+          nodeCron:       this.poweronSchedule.nodeCron,
+          vmCron:         this.poweronSchedule.vmCron,
+          nodes:          this.poweronSchedule.nodes,
+          vms:            this.poweronSchedule.vms,
+          waitForReady:   this.poweronSchedule.waitForReady,
+          timeoutSeconds: this.poweronSchedule.timeoutSeconds,
+        };
+        parsed.ipmi = {
+          user:       this.ipmiUser || 'admin',
+          password:   this.ipmiPassword || '',
+          secretName: parsed?.ipmi?.secretName || 'node-poweron-ipmi',
+        };
+        parsed.nodeBmc = parsed.nodeBmc || {};
+        this.nodeCards.forEach((c) => {
+          if (c.bmcIp) {
+            parsed.nodeBmc[c.node] = { bmcIp: c.bmcIp };
+          }
+        });
         parsed.nodeSchedules = this.nodeCards.map((c) => ({
-          node:        c.node,
-          nodeEnabled: !!c.nodeEnabled,
-          nodeCron:    c.nodeCron || '0 2 * * *',
-          vmEnabled:   !!c.vmEnabled,
-          vmCron:      c.vmCron || '0 1 * * *',
-          vmStrategy:  STRATEGIES.includes(c.vmStrategy) ? c.vmStrategy : 'migrate',
-          vms:         Array.isArray(c.vms) ? [...c.vms].sort() : [],
+          node:               c.node,
+          nodeEnabled:        !!c.nodeEnabled,
+          nodeCron:           c.nodeCron || '0 2 * * *',
+          vmEnabled:          !!c.vmEnabled,
+          vmCron:             c.vmCron || '0 1 * * *',
+          vmStrategy:         STRATEGIES.includes(c.vmStrategy) ? c.vmStrategy : 'migrate',
+          vms:                Array.isArray(c.vms) ? [...c.vms].sort() : [],
+          poweronNodeEnabled: !!c.poweronNodeEnabled,
+          bmcIp:              c.bmcIp || '',
+          poweronNodeCron:    c.poweronNodeCron || '0 6 * * 1-5',
+          poweronVmEnabled:   !!c.poweronVmEnabled,
+          poweronVmCron:      c.poweronVmCron || '0 6 * * 1-5',
+          poweronVms:         Array.isArray(c.poweronVms) ? [...c.poweronVms].sort() : [],
         }));
         this.addon.spec.valuesContent = jsyaml.dump(parsed);
         await this.addon.save();
@@ -235,6 +293,65 @@ export default {
           </label>
         </div>
         <p v-else class="text-muted">(Could not list nodes — the whole cluster will be targeted.)</p>
+      </template>
+
+      <!-- Scheduled power-on (IPMI & VMs) -->
+      <h3 class="mt-30">⚡ Scheduled power-on (IPMI &amp; VMs)</h3>
+      <p class="text-muted mb-10">
+        Automatically wakes up physical nodes via IPMI over LAN and powers on target VirtualMachines once nodes are Ready.
+      </p>
+
+      <label class="checkbox">
+        <input v-model="poweronSchedule.enabled" type="checkbox" />
+        Enable a scheduled power-on
+      </label>
+
+      <template v-if="poweronSchedule.enabled">
+        <div class="mt-15">
+          <label class="label">IPMI Credentials</label>
+          <div class="row">
+            <input
+              v-model="ipmiUser"
+              type="text"
+              placeholder="IPMI Username (e.g. admin)"
+              class="field"
+              style="flex: 1;"
+            />
+            <input
+              v-model="ipmiPassword"
+              type="password"
+              placeholder="IPMI Password"
+              class="field"
+              style="flex: 1;"
+            />
+          </div>
+          <p class="text-muted mt-5">Default credentials used to authenticate with server BMCs via IPMI over LAN.</p>
+        </div>
+
+        <label class="label mt-15">Physical node power-on cron</label>
+        <input
+          v-model="poweronSchedule.nodeCron"
+          type="text"
+          spellcheck="false"
+          placeholder="0 6 * * 1-5"
+          class="field"
+        />
+        <p class="text-muted mt-5">Standard cron (UTC) to send IPMI power-on. Example: <code>0 6 * * 1-5</code> = 06:00 Mon-Fri.</p>
+
+        <label class="label mt-15">Virtual machine power-on cron</label>
+        <input
+          v-model="poweronSchedule.vmCron"
+          type="text"
+          spellcheck="false"
+          placeholder="0 6 * * 1-5"
+          class="field"
+        />
+        <p class="text-muted mt-5">Standard cron (UTC) for starting VirtualMachines after nodes boot.</p>
+
+        <label class="checkbox mt-15">
+          <input v-model="poweronSchedule.waitForReady" type="checkbox" />
+          Wait for physical nodes to become Ready in Kubernetes before powering on VMs
+        </label>
       </template>
 
       <!-- Per-node schedules: one node cron plus one VM cron per card -->
