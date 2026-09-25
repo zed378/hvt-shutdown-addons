@@ -710,6 +710,8 @@ export function init($plugin, store) {
       HCI.VGPU_DEVICE,
       HCI.MIG_CONFIGURATION,
       HCI.USB_DEVICE,
+      'node-shutdown',
+      'node-poweron',
       HCI.ADD_ONS,
       HCI.SECRET,
       HCI.SETTING
@@ -1281,6 +1283,32 @@ export function init($plugin, store) {
     route:      {
       name:   `${ PRODUCT_NAME }-c-cluster-resource`,
       params: { resource: HCI.ADD_ONS }
+    },
+    exact: false,
+  });
+
+  virtualType({
+    label:      'Node Shutdown',
+    group:      'advanced',
+    name:       'node-shutdown',
+    weight:     10,
+    namespaced: false,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-node-shutdown`,
+      params: {}
+    },
+    exact: false,
+  });
+
+  virtualType({
+    label:      'Node Power-on',
+    group:      'advanced',
+    name:       'node-poweron',
+    weight:     9,
+    namespaced: false,
+    route:      {
+      name:   `${ PRODUCT_NAME }-c-cluster-node-poweron`,
+      params: {}
     },
     exact: false,
   });

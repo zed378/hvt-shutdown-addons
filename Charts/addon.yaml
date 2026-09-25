@@ -65,6 +65,9 @@ spec:
         - apiGroups: [""]
           resources: ["pods"]
           verbs: ["get", "list", "delete"]
+        - apiGroups: [""]
+          resources: ["nodes"]
+          verbs: ["get", "list", "watch"]
 
     secret:
       name: "node-shutdown-auth"
@@ -173,6 +176,23 @@ spec:
     # Charts/values.yaml `nodeSchedules`. Inert until the CronJob template
     # ranges over it; the legacy `schedule` block above keeps working.
     nodeSchedules: []
+
+    # Scheduled power-on (IPMI for baremetal + KubeVirt VM start)
+    poweronSchedule:
+      enabled: false
+      nodeCron: "0 6 * * 1-5"
+      vmCron: "0 6 * * 1-5"
+      nodes: []
+      vms: []
+      waitForReady: true
+      timeoutSeconds: 300
+
+    ipmi:
+      user: "admin"
+      password: ""
+      secretName: "node-poweron-ipmi"
+
+    nodeBmc: {}
 
     # Network policy (optional). NOTE: hostNetwork pods largely bypass
     # NetworkPolicy — use a host firewall on the node to restrict NodePort 30088.
