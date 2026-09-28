@@ -1,15 +1,15 @@
 <script>
-const STRATEGIES = ['migrate', 'stop', 'force'];
-
 // Plain-language presets so operators never have to write cron by hand.
 const CRON_PRESETS = [
-  { label: 'Every day at 01:00', value: '0 1 * * *' },
-  { label: 'Every day at 02:00', value: '0 2 * * *' },
-  { label: 'Every Sunday at 02:00', value: '0 2 * * 0' },
+  { label: 'Every weekday at 06:00 (Mon-Fri)', value: '0 6 * * 1-5' },
+  { label: 'Every weekday at 07:00 (Mon-Fri)', value: '0 7 * * 1-5' },
+  { label: 'Every day at 06:00', value: '0 6 * * *' },
+  { label: 'Every day at 07:00', value: '0 7 * * *' },
+  { label: 'Every day at 08:00', value: '0 8 * * *' },
 ];
 
 export default {
-  name: 'NodeShutdownCard',
+  name: 'NodePoweronCard',
 
   props: {
     value: {
@@ -23,22 +23,22 @@ export default {
   },
 
   computed: {
-    selectedCount() {
-      return (this.value.vms || []).length;
+    poweronSelectedCount() {
+      return (this.value.poweronVms || []).length;
     },
     statusText() {
       const parts = [];
 
-      if (this.value.nodeEnabled) {
-        parts.push('node shutdown on');
+      if (this.value.poweronNodeEnabled) {
+        parts.push('node power-on on');
       }
-      if (this.value.vmEnabled) {
-        parts.push(`VM shutdown on (${ this.selectedCount } selected)`);
+      if (this.value.poweronVmEnabled) {
+        parts.push(`VM power-on on (${ this.poweronSelectedCount } selected)`);
       }
       return parts.length ? parts.join(' | ') : 'schedules off';
     },
     startOpen() {
-      return !!(this.value.nodeEnabled || this.value.vmEnabled);
+      return !!(this.value.poweronNodeEnabled || this.value.poweronVmEnabled);
     },
   },
 
@@ -63,10 +63,9 @@ export default {
       if (chosen !== 'custom') {
         this.update({ [field]: chosen });
       }
-      // 'custom' keeps the current value and reveals the text field below.
     },
-    toggleVm(key) {
-      const vms = [...(this.value.vms || [])];
+    togglePoweronVm(key) {
+      const vms = [...(this.value.poweronVms || [])];
       const i = vms.indexOf(key);
 
       if (i >= 0) {
@@ -74,13 +73,13 @@ export default {
       } else {
         vms.push(key);
       }
-      this.update({ vms });
+      this.update({ poweronVms: vms });
     },
-    selectAll() {
-      this.update({ vms: [...this.vmOptions] });
+    selectAllPoweron() {
+      this.update({ poweronVms: [...this.vmOptions] });
     },
-    clearAll() {
-      this.update({ vms: [] });
+    clearAllPoweron() {
+      this.update({ poweronVms: [] });
     },
   },
 };
@@ -97,18 +96,29 @@ export default {
       <label class="checkbox">
         <input
           type="checkbox"
-          :checked="value.nodeEnabled"
-          @change="update({ nodeEnabled: $event.target.checked })"
+          :checked="value.poweronNodeEnabled"
+          @change="update({ poweronNodeEnabled: $event.target.checked })"
         />
-        Shut down this node on a schedule
+        Power on this node on a schedule
       </label>
 
-      <template v-if="value.nodeEnabled">
-        <label class="label mt-10">Node shutdown time</label>
-        <select
-          :value="cronPreset(value.nodeCron)"
+      <template v-if="value.poweronNodeEnabled">
+        <label class="label mt-10">BMC IP address</label>
+        <input
+          :value="value.bmcIp"
+          type="text"
+          spellcheck="false"
+          placeholder="192.168.10.51"
           class="field"
-          @change="onPreset('nodeCron', $event.target.value)"
+          @input="update({ bmcIp: $event.target.value })"
+        />
+        <p class="text-muted mt-5">IPMI / BMC IP address for this physical server.</p>
+
+        <label class="label mt-10">Node power-on time</label>
+        <select
+          :value="cronPreset(value.poweronNodeCron)"
+          class="field"
+          @change="onPreset('poweronNodeCron', $event.target.value)"
         >
           <option
             v-for="p in cronPresets()"
@@ -118,33 +128,33 @@ export default {
           <option value="custom">Custom schedule...</option>
         </select>
         <input
-          v-if="cronPreset(value.nodeCron) === 'custom'"
-          :value="value.nodeCron"
+          v-if="cronPreset(value.poweronNodeCron) === 'custom'"
+          :value="value.poweronNodeCron"
           type="text"
           spellcheck="false"
-          placeholder="0 2 * * *"
+          placeholder="0 6 * * 1-5"
           class="field mt-10"
-          @input="update({ nodeCron: $event.target.value })"
+          @input="update({ poweronNodeCron: $event.target.value })"
         />
-        <p class="text-muted mt-5">{{ presetSummary(value.nodeCron) }}</p>
+        <p class="text-muted mt-5">{{ presetSummary(value.poweronNodeCron) }}</p>
       </template>
 
       <h4 class="mt-20">Virtual machines</h4>
       <label class="checkbox">
         <input
           type="checkbox"
-          :checked="value.vmEnabled"
-          @change="update({ vmEnabled: $event.target.checked })"
+          :checked="value.poweronVmEnabled"
+          @change="update({ poweronVmEnabled: $event.target.checked })"
         />
-        Shut down selected VMs on a schedule
+        Power on selected VMs on a schedule
       </label>
 
-      <template v-if="value.vmEnabled">
-        <label class="label mt-10">VM shutdown time (one time for all selected VMs)</label>
+      <template v-if="value.poweronVmEnabled">
+        <label class="label mt-10">VM power-on time (starts automatically after node is Ready)</label>
         <select
-          :value="cronPreset(value.vmCron)"
+          :value="cronPreset(value.poweronVmCron)"
           class="field"
-          @change="onPreset('vmCron', $event.target.value)"
+          @change="onPreset('poweronVmCron', $event.target.value)"
         >
           <option
             v-for="p in cronPresets()"
@@ -154,47 +164,30 @@ export default {
           <option value="custom">Custom schedule...</option>
         </select>
         <input
-          v-if="cronPreset(value.vmCron) === 'custom'"
-          :value="value.vmCron"
+          v-if="cronPreset(value.poweronVmCron) === 'custom'"
+          :value="value.poweronVmCron"
           type="text"
           spellcheck="false"
-          placeholder="0 1 * * *"
+          placeholder="0 6 * * 1-5"
           class="field mt-10"
-          @input="update({ vmCron: $event.target.value })"
+          @input="update({ poweronVmCron: $event.target.value })"
         />
-        <p class="text-muted mt-5">{{ presetSummary(value.vmCron) }}</p>
-
-        <label class="label mt-10">VM strategy</label>
-        <select
-          :value="value.vmStrategy"
-          class="field"
-          @change="update({ vmStrategy: $event.target.value })"
-        >
-          <option
-            v-for="s in ['migrate', 'stop', 'force']"
-            :key="s"
-            :value="s"
-          >{{ s }}</option>
-        </select>
-        <p class="text-muted mt-5">
-          <b>migrate</b>: live-migrate VMs to surviving nodes (else stop).
-          <b>stop</b>: gracefully stop VMs. <b>force</b>: kill immediately.
-        </p>
+        <p class="text-muted mt-5">{{ presetSummary(value.poweronVmCron) }}</p>
 
         <div class="row mt-10">
           <button
             type="button"
             class="btn role-secondary"
             :disabled="!vmOptions.length"
-            @click="selectAll"
+            @click="selectAllPoweron"
           >Select all</button>
           <button
             type="button"
             class="btn role-secondary"
-            :disabled="!selectedCount"
-            @click="clearAll"
+            :disabled="!poweronSelectedCount"
+            @click="clearAllPoweron"
           >Clear</button>
-          <span class="text-muted">{{ selectedCount }} of {{ vmOptions.length }} selected.</span>
+          <span class="text-muted">{{ poweronSelectedCount }} of {{ vmOptions.length }} selected.</span>
         </div>
         <div
           v-if="vmOptions.length"
@@ -207,8 +200,8 @@ export default {
           >
             <input
               type="checkbox"
-              :checked="(value.vms || []).includes(vm)"
-              @change="toggleVm(vm)"
+              :checked="(value.poweronVms || []).includes(vm)"
+              @change="togglePoweronVm(vm)"
             />
             {{ vm }}
           </label>
@@ -216,8 +209,7 @@ export default {
         <p
           v-else
           class="text-muted mt-10"
-        >No VMs found on this node, or the list could not be loaded. Saving with nothing checked targets all VMs on this node.</p>
-        <p class="text-muted mt-10">Stopped VMs stay off after the node powers back on. Start them again from the Harvester UI or Node Power-on.</p>
+        >No VMs found on this node. Saving with nothing checked targets all VMs on this node.</p>
       </template>
     </details>
   </div>
@@ -251,6 +243,6 @@ export default {
     outline-offset: 1px;
   }
   .mb-5 { margin-bottom: 5px; } .mb-10 { margin-bottom: 10px; }
-  .mt-5 { margin-top: 5px; } .mt-10 { margin-top: 10px; } .mt-20 { margin-top: 20px; }
+  .mt-5 { margin-top: 5px; } .mt-10 { margin-top: 10px; } .mt-15 { margin-top: 15px; } .mt-20 { margin-top: 20px; }
 }
 </style>

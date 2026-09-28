@@ -19,6 +19,8 @@ import HarvesterUnsupported from '../pages/c/_cluster/unsupported/index.vue';
 import ForkliftDashboard from '../pages/c/_cluster/vm-migration/index.vue';
 import ForkliftVmMigrationWizard from '../pages/c/_cluster/vm-migration/vm-migration-wizard.vue';
 import ForkliftProviderWizard from '../pages/c/_cluster/vm-migration/provider-wizard.vue';
+import HarvesterNodeShutdown from '../pages/c/_cluster/node-shutdown/index.vue';
+import HarvesterNodePoweron from '../pages/c/_cluster/node-poweron/index.vue';
 
 const routes = [
   {
@@ -98,6 +100,14 @@ const routes = [
     name:      `${ PRODUCT_NAME }-c-cluster-vm-migration-provider-wizard`,
     path:      `/:product/c/:cluster/vm-migration/provider-wizard`,
     component: ForkliftProviderWizard,
+  }, {
+    name:      `${ PRODUCT_NAME }-c-cluster-node-shutdown`,
+    path:      `/:product/c/:cluster/node-shutdown`,
+    component: HarvesterNodeShutdown,
+  }, {
+    name:      `${ PRODUCT_NAME }-c-cluster-node-poweron`,
+    path:      `/:product/c/:cluster/node-poweron`,
+    component: HarvesterNodePoweron,
   }, {
     name:      `${ PRODUCT_NAME }-c-cluster-resource`,
     path:      `/:product/c/:cluster/:resource`,
