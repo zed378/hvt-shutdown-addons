@@ -301,6 +301,27 @@ consumes `Authorization`). BMC credentials are rendered into the
 They are never placed in env vars or CronJob specs, and ipmitool gets the
 password through `IPMI_PASSWORD` (`-E`), not on the command line.
 
+### kubectl version compatibility
+
+kubectl is only supported within ±1 minor of the API server, so the image is
+not tied to one Harvester release. At startup the service reads the cluster
+version and picks a kubectl (see `GET /system/info`):
+
+1. `kubectl.path` if set (explicit override)
+2. the **host's RKE2 kubectl** (`/var/lib/rancher/rke2/bin`), which always matches the node
+3. a **bundled** kubectl from `/opt/kubectl/<version>`, closest minor first
+4. none within `kubectl.maxSkew` → the Python Kubernetes client (same API calls)
+
+The image bundles kubectl **1.30–1.36** (latest patch of each, sha256-verified),
+covering Harvester v1.7 (k8s 1.34), v1.8 (1.35) and v1.9 (1.36). For a newer
+Harvester, append its minor and rebuild:
+
+```
+docker build --build-arg KUBECTL_VERSIONS="1.30 1.31 1.32 1.33 1.34 1.35 1.36 1.37" -t zed378/hvt-shutdown:latest .
+```
+
+Chart values: `kubectl.source` (`auto` | `host` | `bundled`), `kubectl.path`, `kubectl.maxSkew`.
+
 **Limitations**
 - Power-on runs from a node that is still up. If every node is off, the cluster
   can't wake itself; keep one node running or trigger power-on externally.

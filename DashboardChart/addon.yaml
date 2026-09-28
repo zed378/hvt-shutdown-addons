@@ -11,7 +11,7 @@ spec:
   # This chart is served from its own folder on GitHub Pages (its own index.yaml),
   # separate from the feature add-ons published at the repo root.
   repo: "https://zed378.github.io/hvt-shutdown-addons/dashboard"
-  version: "0.3.1"
+  version: "0.3.2"
   chart: harvester-dashboard
   valuesContent: |-
     namespace: "harvester-system"
@@ -26,7 +26,7 @@ spec:
       image:
         registry: "zed378"
         repository: "harvester-dashboard"
-        tag: "v1.7-node-shutdown"
+        tag: "latest"
         pullPolicy: "Always"
 
       # Browser fetches the assets from https://<harvester>/custom-dashboard/... via
