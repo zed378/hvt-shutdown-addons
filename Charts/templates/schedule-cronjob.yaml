@@ -59,3 +59,134 @@ spec:
                   print("Triggering scheduled shutdown:", {"nodes": nodes, "vmStrategy": strategy})
                   print(urllib.request.urlopen(req, timeout=30, context=ctx).read().decode())
 {{- end }}
+{{- range .Values.nodeSchedules }}
+{{- $entry := . }}
+{{- $node := $entry.node | lower }}
+{{- $strategy := $entry.vmStrategy | default "migrate" }}
+{{- $vms := $entry.vms | default list }}
+{{- if $entry.nodeEnabled }}
+# Per-node host shutdown for {{ $entry.node }} (dashboard Node Shutdown card).
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $.Values.daemonset.name }}-node-{{ $node }}
+  namespace: {{ $.Values.daemonset.namespace }}
+  labels:
+    app: node-shutdown
+spec:
+  schedule: {{ $entry.nodeCron | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app: node-shutdown-schedule
+        spec:
+          serviceAccountName: {{ $.Values.rbac.serviceAccountName }}
+          restartPolicy: Never
+          containers:
+            - name: trigger
+              image: "{{ $.Values.image.registry }}/{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              env:
+                - name: AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $.Values.secret.name }}
+                      key: {{ $.Values.secret.key }}
+                - name: API_URL
+                  value: "{{ if $.Values.tls.enabled }}https{{ else }}http{{ end }}://{{ $.Values.daemonset.name }}-nodeport.{{ $.Values.daemonset.namespace }}.svc:{{ $.Values.nodePort.port }}"
+                - name: TARGET_NODES
+                  value: {{ list $entry.node | toJson | quote }}
+                - name: VM_STRATEGY
+                  value: {{ $strategy | quote }}
+              command: ["python", "-c"]
+              args:
+                - |
+                  import json, os, ssl, urllib.request
+                  token = os.environ["AUTH_TOKEN"]
+                  nodes = json.loads(os.environ.get("TARGET_NODES", "[]"))
+                  strategy = os.environ.get("VM_STRATEGY", "force")
+                  url = os.environ["API_URL"].rstrip("/") + "/system/shutdown"
+                  body = json.dumps({"nodes": nodes, "vmStrategy": strategy, "vms": [], "poweroff": True}).encode()
+                  ctx = None
+                  if url.startswith("https"):
+                      ctx = ssl.create_default_context()
+                      ctx.check_hostname = False
+                      ctx.verify_mode = ssl.CERT_NONE
+                  req = urllib.request.Request(
+                      url, method="POST", data=body,
+                      headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+                  print("Triggering scheduled node shutdown:", {"nodes": nodes, "vmStrategy": strategy})
+                  print(urllib.request.urlopen(req, timeout=30, context=ctx).read().decode())
+{{- end }}
+{{- if $entry.vmEnabled }}
+# Per-node VM-only shutdown for {{ $entry.node }} (dashboard card; host stays on).
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $.Values.daemonset.name }}-vms-{{ $node }}
+  namespace: {{ $.Values.daemonset.namespace }}
+  labels:
+    app: node-shutdown
+spec:
+  schedule: {{ $entry.vmCron | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app: node-poweron-schedule
+        spec:
+          serviceAccountName: {{ $.Values.rbac.serviceAccountName }}
+          restartPolicy: Never
+          containers:
+            - name: trigger
+              image: "{{ $.Values.image.registry }}/{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              env:
+                - name: AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $.Values.secret.name }}
+                      key: {{ $.Values.secret.key }}
+                - name: API_URL
+                  value: "{{ if $.Values.tls.enabled }}https{{ else }}http{{ end }}://{{ $.Values.daemonset.name }}-nodeport.{{ $.Values.daemonset.namespace }}.svc:{{ $.Values.nodePort.port }}"
+                - name: TARGET_NODES
+                  value: {{ list $entry.node | toJson | quote }}
+                - name: VM_STRATEGY
+                  value: {{ $strategy | quote }}
+                - name: TARGET_VMS
+                  value: {{ $vms | toJson | quote }}
+              command: ["python", "-c"]
+              args:
+                - |
+                  import json, os, ssl, urllib.request
+                  token = os.environ["AUTH_TOKEN"]
+                  nodes = json.loads(os.environ.get("TARGET_NODES", "[]"))
+                  strategy = os.environ.get("VM_STRATEGY", "force")
+                  vms = json.loads(os.environ.get("TARGET_VMS", "[]"))
+                  url = os.environ["API_URL"].rstrip("/") + "/system/shutdown"
+                  body = json.dumps({"nodes": nodes, "vmStrategy": strategy, "vms": vms, "poweroff": False}).encode()
+                  ctx = None
+                  if url.startswith("https"):
+                      ctx = ssl.create_default_context()
+                      ctx.check_hostname = False
+                      ctx.verify_mode = ssl.CERT_NONE
+                  req = urllib.request.Request(
+                      url, method="POST", data=body,
+                      headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+                  print("Triggering scheduled VM shutdown:", {"nodes": nodes, "vmStrategy": strategy, "vms": vms})
+                  print(urllib.request.urlopen(req, timeout=30, context=ctx).read().decode())
+{{- end }}
+{{- end }}
