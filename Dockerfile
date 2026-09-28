@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # kubectl: VM start/stop/migrate is done with `kubectl patch|create|delete`
 # using the pod's in-cluster ServiceAccount (same least-privilege RBAC).
 # Pinned and checksum-verified. Keep within +/-1 minor of the Harvester k8s version.
-ARG KUBECTL_VERSION=v1.31.4
+ARG KUBECTL_VERSION=v1.34.3
 ARG TARGETARCH=amd64
 RUN python - <<EOF
 import hashlib, os, urllib.request

@@ -14,7 +14,7 @@
 #     cert, no VIP baked in, and no certificate approval.
 
 # ---- Stage 1: Build the full Harvester dashboard ----
-FROM node:20 AS builder
+FROM node:24 AS builder
 
 WORKDIR /build
 COPY harvester-ui-extension/ ./
