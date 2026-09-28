@@ -12,8 +12,10 @@ auth:
 image:
   registry: "zed378"
   repository: "hvt-shutdown"
+  # "latest" is the release channel (kubectl is chosen per cluster at runtime),
+  # so pull on every pod start to pick up new pushes.
   tag: "latest"
-  pullPolicy: "IfNotPresent"
+  pullPolicy: "Always"
 
 daemonset:
   name: "node-shutdown-webhook"
@@ -231,6 +233,22 @@ scheduleTimeZone: ""
 # How VMs are started/stopped: "kubectl" (kubectl patch inside the pod) or
 # "api" (Python Kubernetes client). Both issue the same API call.
 vmControl: "kubectl"
+
+# Which kubectl binary to use. The service reads the cluster version at startup
+# and picks a compatible binary automatically, so the same image works across
+# Harvester upgrades (v1.7 = k8s 1.34, v1.8 = 1.35, v1.9 = 1.36; bundled: 1.30-1.36):
+#   source: auto     host RKE2 kubectl (always matches) -> bundled -> PATH
+#           host     only the host's kubectl
+#           bundled  only the versions baked into the image (Dockerfile
+#                    ARG KUBECTL_VERSIONS)
+#   path:   explicit binary path; overrides everything (e.g. "/opt/kubectl/v1.36.4/kubectl")
+#   maxSkew: allowed |client minor - server minor| (Kubernetes supports 1)
+# If nothing fits, VM control falls back to the Python client. Check the choice
+# with GET /system/info.
+kubectl:
+  source: "auto"
+  path: ""
+  maxSkew: 1
 
 # Default BMC credentials (used when a node entry has no user/password).
 ipmi:

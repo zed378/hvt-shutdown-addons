@@ -134,6 +134,18 @@ spec:
               value: "/etc/bmc/bmc.json"
             - name: VM_CONTROL
               value: {{ .Values.vmControl | default "kubectl" | quote }}
+            # kubectl is chosen per cluster version (host RKE2 kubectl first,
+            # then a bundled one within maxSkew); see app/kubectl_resolver.py.
+            - name: KUBECTL_SOURCE
+              value: {{ .Values.kubectl.source | default "auto" | quote }}
+            - name: KUBECTL_MAX_SKEW
+              value: {{ .Values.kubectl.maxSkew | default 1 | quote }}
+            - name: HOST_ROOT
+              value: {{ .Values.hostPath.mountPath | quote }}
+            {{- with .Values.kubectl.path }}
+            - name: KUBECTL_BIN
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.tls.enabled }}
             - name: TLS_ENABLED
               value: "true"

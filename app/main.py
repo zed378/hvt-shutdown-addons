@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import secrets
-import shutil
 import signal
 import subprocess
 import threading
@@ -19,7 +18,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from kubernetes import client, config
 
-from app import bmc
+from app import bmc, kubectl_resolver
 
 # Grace period in seconds for pod termination (0 = immediate)
 GRACE_PERIOD_SECONDS = int(os.getenv("GRACE_PERIOD_SECONDS", "10"))
@@ -72,10 +71,11 @@ IPMI_PASSWORD_FILE = os.getenv("IPMI_PASSWORD_FILE")
 BMC_CONFIG_FILE = os.getenv("BMC_CONFIG_FILE", "/etc/bmc/bmc.json")
 
 # How VirtualMachines are started/stopped: "kubectl" runs `kubectl patch` inside
-# the pod (falls back to the Python client when the binary is missing); "api"
-# always uses the Python Kubernetes client. Both make the same API call.
+# the pod; "api" always uses the Python Kubernetes client. Both make the same API
+# call. Which kubectl binary is used is decided per cluster version by
+# app/kubectl_resolver.py (host RKE2 kubectl, else a bundled one within skew);
+# with no compatible binary we fall back to the Python client.
 VM_CONTROL = os.getenv("VM_CONTROL", "kubectl").lower()
-KUBECTL_BIN = os.getenv("KUBECTL_BIN", "kubectl")
 
 # Annotation remembering a VM's runStrategy before we halted it, so a scheduled
 # power-on restores e.g. RerunOnFailure instead of forcing Always.
@@ -315,6 +315,12 @@ async def lifespan(app: FastAPI):
 
     global _app_shutdown_event
     _app_shutdown_event = asyncio.Event()
+    if VM_CONTROL == "kubectl":
+        # Log the kubectl picked for this cluster version once at startup.
+        try:
+            await asyncio.to_thread(kubectl_resolver.resolve, True)
+        except Exception as e:
+            logger.warning(f"kubectl resolution failed: {e}")
     yield
     logger.info("Node Shutdown API shutting down...")
     # Clean up resources here
@@ -604,13 +610,24 @@ class VmNotFound(Exception):
     status = 404
 
 
+def _kubectl_path():
+    """Path of the kubectl chosen for this cluster's version, or None."""
+    if VM_CONTROL != "kubectl":
+        return None
+    chosen = kubectl_resolver.resolve()
+    return chosen["path"] if chosen else None
+
+
 def _use_kubectl() -> bool:
-    return VM_CONTROL == "kubectl" and shutil.which(KUBECTL_BIN) is not None
+    return _kubectl_path() is not None
 
 
 def _kubectl(args: list[str], timeout: int = 30, stdin: str = None) -> str:
     """Run kubectl with the pod's in-cluster ServiceAccount credentials."""
-    res = subprocess.run([KUBECTL_BIN] + args, capture_output=True, text=True,
+    path = _kubectl_path()
+    if not path:
+        raise RuntimeError("No kubectl compatible with this cluster version")
+    res = subprocess.run([path] + args, capture_output=True, text=True,
                          timeout=timeout, input=stdin)
     if res.returncode != 0:
         err = (res.stderr or res.stdout).strip()
@@ -821,6 +838,19 @@ async def vm_power(action: str, request: Request):
     threading.Thread(target=fn, args=(vms,), daemon=True, name=f"vm-{action}").start()
     return {"status": f"VM {action} initiated", "vms": vms,
             "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/system/info", dependencies=[Depends(verify_token)])
+async def system_info():
+    """Service diagnostics: cluster version and which kubectl is used for VMs."""
+    kubectl = await asyncio.to_thread(kubectl_resolver.info) if VM_CONTROL == "kubectl" else None
+    return {
+        "node": NODE_NAME,
+        "vmControl": VM_CONTROL,
+        "vmControlEffective": "kubectl" if kubectl and kubectl.get("chosen") else "api",
+        "kubectl": kubectl,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.get("/system/poweron/status", dependencies=[Depends(verify_token)])

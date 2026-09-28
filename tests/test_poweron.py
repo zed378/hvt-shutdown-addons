@@ -187,6 +187,15 @@ def test_verify_token_accepts_custom_header(monkeypatch):
 
 # --- kubectl VM control -------------------------------------------------------
 
+KUBECTL = "/opt/kubectl/v1.34.3/kubectl"
+
+
+def _use_fake_kubectl(monkeypatch):
+    monkeypatch.setattr(main, "VM_CONTROL", "kubectl")
+    monkeypatch.setattr(main.kubectl_resolver, "resolve",
+                        lambda force=False: {"path": KUBECTL, "source": "bundled", "version": "v1.34.3"})
+
+
 def _kubectl_fake(vm):
     calls = []
 
@@ -202,13 +211,12 @@ def test_start_vm_via_kubectl_restores_run_strategy(monkeypatch):
     vm = {"metadata": {"annotations": {main.PREV_RUN_STRATEGY_ANNOTATION: "RerunOnFailure"}},
           "spec": {"runStrategy": "Halted"}}
     run, calls = _kubectl_fake(vm)
-    monkeypatch.setattr(main, "VM_CONTROL", "kubectl")
-    monkeypatch.setattr(main.shutil, "which", lambda b: "/usr/local/bin/kubectl")
+    _use_fake_kubectl(monkeypatch)
     monkeypatch.setattr(main.subprocess, "run", run)
 
     assert main._start_virtual_machines(["prod/web-01", "a/b/c"]) == 1
     patch_cmd = calls[-1]
-    assert patch_cmd[:6] == ["kubectl", "patch", "virtualmachines.kubevirt.io", "web-01", "-n", "prod"]
+    assert patch_cmd[:6] == [KUBECTL, "patch", "virtualmachines.kubevirt.io", "web-01", "-n", "prod"]
     patch = json.loads(patch_cmd[patch_cmd.index("-p") + 1])
     assert patch == {"spec": {"runStrategy": "RerunOnFailure"},
                      "metadata": {"annotations": {main.PREV_RUN_STRATEGY_ANNOTATION: None}}}
@@ -223,6 +231,7 @@ def test_stop_patch_remembers_run_strategy():
 
 
 def test_kubectl_not_found_maps_to_404(monkeypatch):
+    _use_fake_kubectl(monkeypatch)
     monkeypatch.setattr(main.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(
         returncode=1, stdout="", stderr='Error from server (NotFound): virtualmachines.kubevirt.io "x" not found'))
     with pytest.raises(main.VmNotFound) as e:
@@ -249,9 +258,14 @@ def test_poweron_sequence_reports_failures(monkeypatch):
 
 def test_stop_virtual_machines_node_independent(monkeypatch):
     run, calls = _kubectl_fake({"spec": {"runStrategy": "RerunOnFailure"}})
-    monkeypatch.setattr(main, "VM_CONTROL", "kubectl")
-    monkeypatch.setattr(main.shutil, "which", lambda b: "/usr/local/bin/kubectl")
+    _use_fake_kubectl(monkeypatch)
     monkeypatch.setattr(main.subprocess, "run", run)
     assert main._stop_virtual_machines(["prod/db-01"]) == 1
     patch = json.loads(calls[-1][calls[-1].index("-p") + 1])
     assert patch["spec"] == {"runStrategy": "Halted"}
+
+
+def test_no_compatible_kubectl_falls_back_to_api(monkeypatch):
+    monkeypatch.setattr(main, "VM_CONTROL", "kubectl")
+    monkeypatch.setattr(main.kubectl_resolver, "resolve", lambda force=False: None)
+    assert main._use_kubectl() is False
