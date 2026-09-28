@@ -3,9 +3,9 @@ entries:
   harvester-dashboard:
   - apiVersion: v2
     appVersion: v1.7-node-shutdown
-    created: "2026-07-17T16:25:07.712499937+07:00"
+    created: "2026-09-28T11:23:22.3085861+07:00"
     description: Custom Harvester dashboard (hosts add-on menus) served as ui-index
-    digest: 9298fdd8d476729c3ab124fecaf072e1a4d09b947f6ec9218c5c213bcd7804ba
+    digest: 4de4a56d7400c00bdc9b86e1062153d49f36b2de102497def08db5cfd33a48f0
     keywords:
     - harvester
     - dashboard
@@ -18,4 +18,4 @@ entries:
     urls:
     - https://zed378.github.io/hvt-shutdown-addons/dashboard/harvester-dashboard-0.3.1.tgz
     version: 0.3.1
-generated: "2026-07-17T16:25:07.71145782+07:00"
+generated: "2026-09-28T11:23:22.3075219+07:00"

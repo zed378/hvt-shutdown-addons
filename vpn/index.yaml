@@ -1,0 +1,26 @@
+apiVersion: v1
+entries:
+  vpn:
+  - apiVersion: v2
+    appVersion: latest
+    created: "2026-09-28T11:23:22.6975371+07:00"
+    description: VPN agents (NetBird, Tailscale, ZeroTier, OpenVPN) for Harvester
+      nodes
+    digest: 1df76eeddc2d4e5f7f47cdabeee1afb3c7267ee6b9e2f31e068e2a7191644eb5
+    keywords:
+    - harvester
+    - vpn
+    - netbird
+    - tailscale
+    - zerotier
+    - openvpn
+    - wireguard
+    maintainers:
+    - name: hvt-shutdown-addons
+      url: https://github.com/zed378/hvt-shutdown-addons
+    name: vpn
+    type: application
+    urls:
+    - https://zed378.github.io/hvt-shutdown-addons/vpn/vpn-0.1.0.tgz
+    version: 0.1.0
+generated: "2026-09-28T11:23:22.6958555+07:00"

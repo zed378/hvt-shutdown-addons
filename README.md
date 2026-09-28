@@ -205,6 +205,22 @@ curl -X POST "http://VIP:30088/system/shutdown?all_nodes=false" \
   -H "Authorization: Bearer your-secret-token"
 ```
 
+**Optional JSON body:**
+
+```json
+{
+  "nodes": ["node1"],
+  "vmStrategy": "migrate",
+  "vms": ["default/web-01"],
+  "poweroff": true
+}
+```
+
+- `nodes` empty = whole cluster; listed = only those nodes (selected-node shutdown).
+- `vmStrategy` = `stop` | `migrate` | `force` (default `force`).
+- `vms` = restrict the VM phase to these `namespace/name` VMs; empty = all VMs on each target node. Filtering is fail-closed: unmapped names touch nothing.
+- `poweroff` = `false` runs the VM phase only and leaves the host on (used by VM-only schedules).
+
 **Shutdown Behavior:**
 
 1. Rate limit check (configurable requests per minute)
@@ -262,6 +278,36 @@ Kubernetes connectivity health check endpoint. Returns 503 if the Kubernetes cli
   "timestamp": "2026-06-30T04:21:00+00:00"
 }
 ```
+
+## Power Schedules (per-node & per-VM shutdown / power-on)
+
+Dashboard page **Power Schedules**. Check a node or VM and it gets **its own
+shutdown cron and its own power-on cron** (leave one empty to skip that
+direction). Saving writes `nodePowerSchedules`, `vmPowerSchedules` and `nodeBmc`
+into the add-on values; the chart renders one CronJob per direction.
+
+| Target | Shutdown | Power-on |
+|---|---|---|
+| Node | `POST /system/shutdown` (`nodes:[node]`, `vmStrategy`) → graceful host poweroff | `POST /system/poweron` → BMC power-on via **IPMI** or **Redfish** |
+| VM | `POST /system/vm/stop` → `kubectl patch vm` `runStrategy: Halted` | `POST /system/vm/start` → previous `runStrategy` restored |
+
+**BMC / management IP.** A server's iDRAC / iLO / XCC / IPMI address is not the
+node's host IP. Each node card has a *Management (BMC) connection* form
+(protocol, management IP, port, user, password, verify TLS) and a **Test
+connection** button, which calls `POST /system/bmc/test` through the Kubernetes
+service proxy (token in the `X-Node-Shutdown-Token` header, because the proxy
+consumes `Authorization`). BMC credentials are rendered into the
+`node-poweron-bmc` Secret and mounted into the DaemonSet (`/etc/bmc/bmc.json`).
+They are never placed in env vars or CronJob specs, and ipmitool gets the
+password through `IPMI_PASSWORD` (`-E`), not on the command line.
+
+**Limitations**
+- Power-on runs from a node that is still up. If every node is off, the cluster
+  can't wake itself; keep one node running or trigger power-on externally.
+- Every node must be able to reach the BMC network (IPMI UDP 623 / Redfish TCP 443).
+- Crons use `scheduleTimeZone` (e.g. `Asia/Jakarta`, Kubernetes ≥ 1.27), or UTC if it's empty.
+- The older `nodeSchedules` cards are imported into the new model the first time
+  the page is opened, then cleared on save.
 
 ## Configuration
 
