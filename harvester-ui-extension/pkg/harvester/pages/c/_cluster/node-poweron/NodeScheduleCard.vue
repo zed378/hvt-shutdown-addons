@@ -1,10 +1,13 @@
 <script>
 import { cronError } from './cron';
+import VmScheduleRow from './VmScheduleRow.vue';
 
 const STRATEGIES = ['migrate', 'stop', 'force'];
 
 export default {
   name: 'NodeScheduleCard',
+
+  components: { VmScheduleRow },
 
   props: {
     // { node, enabled, shutdownCron, poweronCron, vmStrategy,
@@ -23,13 +26,24 @@ export default {
       type:     Function,
       required: true,
     },
+    // VM rows that belong to this node (running here, or last saved here).
+    vms: {
+      type:    Array,
+      default: () => [],
+    },
   },
+
+  // Declared so Vue 3 does not also bind the parent's listener to the root
+  // element as a native DOM event.
+  emits: ['update', 'update-vm'],
 
   data() {
     return {
       strategies: STRATEGIES,
       testing:    false,
       testResult: null,
+      // Start expanded when something on this node is already scheduled.
+      open:       !!(this.value.enabled || this.vms.some((v) => v.enabled)),
     };
   },
 
@@ -52,11 +66,15 @@ export default {
     defaultPort() {
       return this.bmc.protocol === 'redfish' ? 443 : 623;
     },
+    scheduledVms() {
+      return this.vms.filter((v) => v.enabled).length;
+    },
     statusText() {
-      if (!this.value.enabled) {
-        return 'not scheduled';
-      }
       const parts = [];
+
+      if (!this.value.enabled) {
+        parts.push('node not scheduled');
+      }
 
       if ((this.value.shutdownCron || '').trim()) {
         parts.push(`shutdown ${ this.value.shutdownCron }`);
@@ -65,13 +83,18 @@ export default {
         parts.push(`power on ${ this.value.poweronCron }`);
       }
 
-      return parts.join(' | ') || 'enabled, no cron set';
+      if (this.value.enabled && !parts.length) {
+        parts.push('node enabled, no cron set');
+      }
+      parts.push(`VMs ${ this.scheduledVms }/${ this.vms.length } scheduled`);
+
+      return parts.join(' · ');
     },
   },
 
   methods: {
     update(patch) {
-      this.$emit('input', { ...this.value, ...patch });
+      this.$emit('update', { ...this.value, ...patch });
     },
     updateBmc(patch) {
       this.testResult = null;
@@ -97,81 +120,99 @@ export default {
     class="node-card"
     :class="{ enabled: value.enabled }"
   >
-    <label class="head">
-      <input
-        type="checkbox"
-        :checked="value.enabled"
-        @change="update({ enabled: $event.target.checked })"
-      />
-      <span class="title">{{ value.node }}</span>
+    <div class="head">
+      <button
+        type="button"
+        class="toggle"
+        :aria-expanded="open ? 'true' : 'false'"
+        :aria-label="`${ open ? 'Collapse' : 'Expand' } ${ value.node }`"
+        @click="open = !open"
+      >
+        <i :class="open ? 'icon icon-chevron-down' : 'icon icon-chevron-right'" />
+      </button>
+      <span
+        class="title"
+        @click="open = !open"
+      >{{ value.node }}</span>
       <span
         v-if="hostIp"
         class="text-muted"
       >host IP {{ hostIp }}</span>
       <span class="text-muted status">{{ statusText }}</span>
-    </label>
+    </div>
 
     <div
-      v-if="value.enabled"
+      v-if="open"
       class="body"
     >
-      <div class="grid">
-        <div>
-          <label class="label">Shutdown schedule (cron)</label>
-          <input
-            :value="value.shutdownCron"
-            type="text"
-            spellcheck="false"
-            placeholder="0 22 * * 5  (empty = none)"
-            class="field"
-            :class="{ invalid: shutdownError }"
-            @input="update({ shutdownCron: $event.target.value })"
-          />
-          <p
-            v-if="shutdownError"
-            class="text-error hint"
-          >
-            {{ shutdownError }}
-          </p>
-        </div>
-        <div>
-          <label class="label">Power-on schedule (cron)</label>
-          <input
-            :value="value.poweronCron"
-            type="text"
-            spellcheck="false"
-            placeholder="0 6 * * 1  (empty = none)"
-            class="field"
-            :class="{ invalid: poweronError }"
-            @input="update({ poweronCron: $event.target.value })"
-          />
-          <p
-            v-if="poweronError"
-            class="text-error hint"
-          >
-            {{ poweronError }}
-          </p>
-        </div>
-      </div>
-
-      <label class="label mt-10">VMs on this node at shutdown</label>
-      <select
-        :value="value.vmStrategy"
-        class="field"
-        @change="update({ vmStrategy: $event.target.value })"
-      >
-        <option
-          v-for="s in strategies"
-          :key="s"
-          :value="s"
+      <h4>Node</h4>
+      <label class="checkbox">
+        <input
+          type="checkbox"
+          :checked="value.enabled"
+          @change="update({ enabled: $event.target.checked })"
         >
-          {{ s }}
-        </option>
-      </select>
-      <p class="text-muted hint">
-        <b>migrate</b>: live-migrate to other nodes (else stop). <b>stop</b>: graceful stop — VMs stay off
-        until their own power-on schedule. <b>force</b>: kill immediately.
-      </p>
+        Schedule shutdown / power-on for this node
+      </label>
+      <template v-if="value.enabled">
+        <div class="grid">
+          <div>
+            <label class="label">Shutdown schedule (cron)</label>
+            <input
+              :value="value.shutdownCron"
+              type="text"
+              spellcheck="false"
+              placeholder="0 22 * * 5  (empty = none)"
+              class="field"
+              :class="{ invalid: shutdownError }"
+              @input="update({ shutdownCron: $event.target.value })"
+            />
+            <p
+              v-if="shutdownError"
+              class="text-error hint"
+            >
+              {{ shutdownError }}
+            </p>
+          </div>
+          <div>
+            <label class="label">Power-on schedule (cron)</label>
+            <input
+              :value="value.poweronCron"
+              type="text"
+              spellcheck="false"
+              placeholder="0 6 * * 1  (empty = none)"
+              class="field"
+              :class="{ invalid: poweronError }"
+              @input="update({ poweronCron: $event.target.value })"
+            />
+            <p
+              v-if="poweronError"
+              class="text-error hint"
+            >
+              {{ poweronError }}
+            </p>
+          </div>
+        </div>
+
+        <label class="label mt-10">VMs on this node at shutdown</label>
+        <select
+          :value="value.vmStrategy"
+          class="field"
+          @change="update({ vmStrategy: $event.target.value })"
+        >
+          <option
+            v-for="s in strategies"
+            :key="s"
+            :value="s"
+          >
+            {{ s }}
+          </option>
+        </select>
+        <p class="text-muted hint">
+          <b>migrate</b>: live-migrate to other nodes (else stop). <b>stop</b>: graceful stop — VMs stay off
+          until their own power-on schedule. <b>force</b>: kill immediately.
+        </p>
+      </template>
 
       <fieldset class="bmc mt-15">
         <legend>Management (BMC) connection — used for power-on</legend>
@@ -286,6 +327,22 @@ export default {
       >
         A power-on schedule needs a management IP.
       </p>
+
+      <h4 class="mt-20">
+        Virtual machines on this node
+      </h4>
+      <p
+        v-if="!vms.length"
+        class="text-muted hint"
+      >
+        No VMs on this node.
+      </p>
+      <VmScheduleRow
+        v-for="vm in vms"
+        :key="vm.vm"
+        :value="vm"
+        @update="$emit('update-vm', vm.vm, $event)"
+      />
     </div>
   </div>
 </template>
@@ -298,7 +355,10 @@ export default {
   margin-top: 10px;
 
   &.enabled { border-color: var(--primary, #0055a4); }
-  .head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; cursor: pointer; }
+  .head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .head .title { cursor: pointer; }
+  .toggle { background: none; border: 0; color: inherit; cursor: pointer; padding: 4px; line-height: 1; }
+  h4 { margin: 0 0 4px; }
   .title { font-weight: 600; font-size: 1.05em; }
   .status { margin-left: auto; }
   .body { margin-top: 10px; }
@@ -318,7 +378,7 @@ export default {
   .bmc legend { padding: 0 6px; font-weight: 600; }
   .checkbox { display: flex; gap: 6px; align-items: center; padding: 7px 0; cursor: pointer; }
   .hint { margin: 4px 0 0; font-size: 0.9em; }
-  .mb-10 { margin-bottom: 10px; } .mt-10 { margin-top: 10px; } .mt-15 { margin-top: 15px; }
+  .mb-10 { margin-bottom: 10px; } .mt-10 { margin-top: 10px; } .mt-15 { margin-top: 15px; } .mt-20 { margin-top: 20px; }
   input:focus-visible, select:focus-visible, button:focus-visible {
     outline: 2px solid var(--primary, #0055a4);
     outline-offset: 1px;

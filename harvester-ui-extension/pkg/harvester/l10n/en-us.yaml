@@ -37,6 +37,7 @@ nav:
     'Monitoring and Logging': Monitoring and Logging
     vmimport: Virtual Machine Imports
     vmMigration: Virtual Machine Migration
+    vpn: VPN
     Configurations: Configurations
 
 resourceTable:

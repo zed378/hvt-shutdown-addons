@@ -1288,7 +1288,7 @@ export function init($plugin, store) {
   });
 
   virtualType({
-    label:      'Node Shutdown',
+    label:      'Node Shutdown Auth Key',
     group:      'advanced',
     name:       'node-shutdown',
     weight:     10,
@@ -1544,6 +1544,42 @@ export function init($plugin, store) {
       params: {}
     }
   });
+
+  // vpn add-on — ONE add-on providing several VPN agents, each with its own page
+  // in a "VPN" nav group. The whole group is gated on that single add-on being
+  // enabled; which provider actually deploys is a per-provider toggle on its page.
+  [
+    {
+      name: 'vpn-netbird', label: 'NetBird', weight: 4
+    },
+    {
+      name: 'vpn-tailscale', label: 'Tailscale', weight: 3
+    },
+    {
+      name: 'vpn-zerotier', label: 'ZeroTier', weight: 2
+    },
+    {
+      name: 'vpn-openvpn', label: 'OpenVPN', weight: 1
+    },
+  ].forEach(({ name, label, weight }) => {
+    virtualType({ // needed to avoid 404 on refresh when combined with registerAddonSideNav()
+      label,
+      group:      'vpn',
+      namespaced: false,
+      name,
+      weight,
+      route:      { name: `${ PRODUCT_NAME }-c-cluster-${ name }`, params: {} },
+      exact:      true,
+    });
+  });
+  registerAddonSideNav(store, PRODUCT_NAME, {
+    addonName:     'vpn',
+    resourceType:  HCI.ADD_ONS,
+    navGroup:      'vpn',
+    requireSchema: false,
+    types:         ['vpn-netbird', 'vpn-tailscale', 'vpn-zerotier', 'vpn-openvpn'],
+  });
+  weightGroup('vpn', 0, false);
 
   // Enable SideNav based on Forklift Addon Status
   // The dashboard entry ('forklift-create') is a schema-less virtual type, so it
