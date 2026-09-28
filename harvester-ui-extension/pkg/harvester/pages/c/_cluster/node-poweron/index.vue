@@ -1,6 +1,7 @@
 <script>
 import jsyaml from 'js-yaml';
 import NodeScheduleCard from './NodeScheduleCard.vue';
+import VmScheduleRow from './VmScheduleRow.vue';
 import { cronError, CRON_EXAMPLES } from './cron';
 
 const ADDON_TYPE = 'harvesterhci.io.addon';
@@ -73,27 +74,29 @@ function b64decode(s) {
 export default {
   name: 'HarvesterPowerSchedules',
 
-  components: { NodeScheduleCard },
+  components: { NodeScheduleCard, VmScheduleRow },
 
   data() {
     return {
-      addon:         null,
-      values:        {},
-      token:         '',
-      timeZone:      '',
-      nodeCards:     [],
-      vmRows:        [],
-      hostIps:       {},
-      vmFilter:      '',
-      examples:      CRON_EXAMPLES,
-      migrated:      false,
-      saving:        false,
-      saved:         false,
-      saveError:     '',
-      loadError:     '',
-      vmLoadError:   '',
-      tokenWarning:  '',
-      loading:       true,
+      addon:          null,
+      values:         {},
+      token:          '',
+      timeZone:       '',
+      nodeCards:      [],
+      vmRows:         [],
+      hostIps:        {},
+      vmFilter:       '',
+      examples:       CRON_EXAMPLES,
+      migrated:       false,
+      legacySchedule: null,
+      disableLegacy:  false,
+      saving:         false,
+      saved:          false,
+      saveError:      '',
+      loadError:      '',
+      vmLoadError:    '',
+      tokenWarning:   '',
+      loading:        true,
     };
   },
 
@@ -111,6 +114,11 @@ export default {
     }
     this.values = parsed;
     this.timeZone = parsed.scheduleTimeZone || '';
+    // The old cluster-wide schedule (formerly on the Node Shutdown page) is no
+    // longer editable; surface it so it can be switched off.
+    if (parsed.schedule?.enabled) {
+      this.legacySchedule = parsed.schedule;
+    }
 
     // Token for the "Test connection" call: the Secret is the source of truth
     // (the token console may have rotated it); fall back to the add-on value.
@@ -131,6 +139,7 @@ export default {
 
     // Nodes (and their host IPs, to contrast with the BMC IP).
     let nodeNames = [];
+    const hostIps = {};
 
     try {
       const nodes = await this.$store.dispatch('harvester/findAll', { type: 'node' });
@@ -142,10 +151,11 @@ export default {
           nodeNames.push(name);
           const ip = (n.status?.addresses || []).find((a) => a.type === 'InternalIP');
 
-          this.$set(this.hostIps, name, ip?.address || '');
+          hostIps[name] = ip?.address || '';
         }
       });
     } catch (e) {}
+    this.hostIps = hostIps;
 
     // VMs (running or not) and where they currently run.
     const vmInfo = {};
@@ -156,7 +166,12 @@ export default {
       (vms || []).forEach((vm) => {
         const ref = `${ vm.metadata?.namespace }/${ vm.metadata?.name }`;
 
-        vmInfo[ref] = { status: vm.status?.printableStatus || (vm.status?.ready ? 'Running' : 'Stopped'), node: '' };
+        vmInfo[ref] = {
+          status: vm.status?.printableStatus || (vm.status?.ready ? 'Running' : 'Stopped'),
+          node:   '',
+          // A stopped VM has no VMI; fall back to a node it is pinned to.
+          pinned: vm.spec?.template?.spec?.nodeSelector?.['kubernetes.io/hostname'] || '',
+        };
       });
       const vmis = await this.$store.dispatch('harvester/findAll', { type: VMI_TYPE });
 
@@ -221,13 +236,20 @@ export default {
     });
     const refs = [...new Set([...Object.keys(vmInfo), ...Object.keys(vmByRef)])].sort();
 
-    this.vmRows = refs.map((vm) => ({
-      ...vmDefaults(vm),
-      ...(vmByRef[vm] || {}),
-      status:  vmInfo[vm]?.status || 'Not found',
-      node:    vmInfo[vm]?.node || '',
-      missing: !vmInfo[vm] && !this.vmLoadError,
-    }));
+    this.vmRows = refs.map((vm) => {
+      const info = vmInfo[vm] || {};
+      const saved = vmByRef[vm] || {};
+
+      return {
+        ...vmDefaults(vm),
+        ...saved,
+        status:  info.status || 'Not found',
+        // Which node card the VM is listed under: where it runs now, else where
+        // it was last saved, else the node it is pinned to.
+        home:    info.node || saved.node || info.pinned || '',
+        missing: !vmInfo[vm] && !this.vmLoadError,
+      };
+    });
     this.loading = false;
   },
 
@@ -235,7 +257,21 @@ export default {
     filteredVms() {
       const q = this.vmFilter.trim().toLowerCase();
 
-      return q ? this.vmRows.filter((r) => r.vm.toLowerCase().includes(q) || (r.node || '').includes(q)) : this.vmRows;
+      return q ? this.vmRows.filter((r) => r.vm.toLowerCase().includes(q)) : this.vmRows;
+    },
+    vmsByNode() {
+      const out = {};
+
+      this.filteredVms.forEach((r) => {
+        (out[r.home] = out[r.home] || []).push(r);
+      });
+
+      return out;
+    },
+    unassignedVms() {
+      const nodes = new Set(this.nodeCards.map((c) => c.node));
+
+      return this.filteredVms.filter((r) => !nodes.has(r.home));
     },
     enabledNodes() {
       return this.nodeCards.filter((c) => c.enabled).length;
@@ -274,16 +310,16 @@ export default {
   },
 
   methods: {
-    cronError,
-
     onNodeInput(index, card) {
-      this.$set(this.nodeCards, index, card);
+      this.nodeCards.splice(index, 1, card);
     },
 
-    updateVm(row, patch) {
-      const i = this.vmRows.indexOf(row);
+    updateVm(ref, patch) {
+      const i = this.vmRows.findIndex((r) => r.vm === ref);
 
-      this.$set(this.vmRows, i, { ...row, ...patch });
+      if (i >= 0) {
+        this.vmRows.splice(i, 1, { ...this.vmRows[i], ...patch });
+      }
     },
 
     // Calls the API through the Kubernetes service proxy. The proxy consumes the
@@ -370,11 +406,15 @@ export default {
           .filter((r) => r.enabled || (r.shutdownCron || '').trim() || (r.poweronCron || '').trim())
           .map((r) => ({
             vm:           r.vm,
+            node:         r.home || '',
             enabled:      !!r.enabled,
             shutdownCron: (r.shutdownCron || '').trim(),
             poweronCron:  (r.poweronCron || '').trim(),
           }));
         parsed.scheduleTimeZone = this.timeZone.trim();
+        if (this.disableLegacy && parsed.schedule) {
+          parsed.schedule.enabled = false;
+        }
         // Superseded by the per-node / per-VM lists above; clearing avoids
         // duplicate CronJobs from the old per-node cards.
         parsed.nodeSchedules = [];
@@ -388,6 +428,10 @@ export default {
           }
         }));
         this.migrated = false;
+        if (this.disableLegacy) {
+          this.legacySchedule = null;
+          this.disableLegacy = false;
+        }
         this.saved = true;
       } catch (e) {
         this.saveError = e?.message || String(e);
@@ -455,13 +499,45 @@ export default {
         {{ tokenWarning }}
       </p>
 
+      <div
+        v-if="legacySchedule"
+        class="banner-warning mb-10"
+      >
+        A legacy <b>cluster-wide</b> shutdown schedule is still active
+        (<code>{{ legacySchedule.cron }}</code>, {{ (legacySchedule.nodes || []).length ? legacySchedule.nodes.join(', ') : 'all nodes' }},
+        {{ legacySchedule.vmStrategy }}). It is no longer editable here; per-node schedules below replace it.
+        <label class="checkbox-inline">
+          <input
+            v-model="disableLegacy"
+            type="checkbox"
+          >
+          Disable it when I save
+        </label>
+      </div>
+
       <h3 class="mt-20">
-        Nodes <span class="text-muted count">{{ enabledNodes }} scheduled</span>
+        Nodes <span class="text-muted count">{{ enabledNodes }} nodes · {{ enabledVms }} VMs scheduled</span>
       </h3>
+      <p class="text-muted hint">
+        Expand a node to set its own schedule, its BMC connection, and a schedule for each VM on it.
+      </p>
       <p class="text-warning hint">
         Power-on runs from a node that is still up. If every node is off, nothing in the cluster can power them back on.
         Keep at least one node running, or power on from outside the cluster.
       </p>
+      <p
+        v-if="vmLoadError"
+        class="text-warning"
+      >
+        Could not list VMs: {{ vmLoadError }}
+      </p>
+      <input
+        v-model="vmFilter"
+        type="search"
+        placeholder="Filter VMs by namespace/name"
+        aria-label="Filter VMs"
+        class="field mb-10"
+      >
       <p
         v-if="loading"
         class="text-muted"
@@ -474,91 +550,26 @@ export default {
         :value="card"
         :host-ip="hostIps[card.node] || ''"
         :test-connection="testConnection"
-        @input="onNodeInput(i, $event)"
+        :vms="vmsByNode[card.node] || []"
+        @update="onNodeInput(i, $event)"
+        @update-vm="updateVm"
       />
 
-      <h3 class="mt-30">
-        Virtual machines <span class="text-muted count">{{ enabledVms }} scheduled</span>
-      </h3>
-      <p
-        v-if="vmLoadError"
-        class="text-warning"
-      >
-        Could not list VMs: {{ vmLoadError }}
-      </p>
-      <input
-        v-model="vmFilter"
-        type="search"
-        placeholder="Filter by name, namespace or node"
-        class="field mb-10"
-      />
-      <div
-        v-if="!loading && !vmRows.length"
-        class="text-muted"
-      >
-        No virtual machines found.
-      </div>
-      <div
-        v-for="row in filteredVms"
-        :key="row.vm"
-        class="vm-row"
-        :class="{ enabled: row.enabled }"
-      >
-        <label class="head">
-          <input
-            type="checkbox"
-            :checked="row.enabled"
-            @change="updateVm(row, { enabled: $event.target.checked })"
-          />
-          <span class="title">{{ row.vm }}</span>
-          <span class="text-muted">{{ row.status }}<template v-if="row.node"> on {{ row.node }}</template></span>
-          <span
-            v-if="row.missing"
-            class="text-warning"
-          >VM no longer exists</span>
-        </label>
-        <div
-          v-if="row.enabled"
-          class="grid mt-10"
-        >
-          <div>
-            <label class="label">Shutdown schedule (cron)</label>
-            <input
-              :value="row.shutdownCron"
-              type="text"
-              spellcheck="false"
-              placeholder="0 21 * * *  (empty = none)"
-              class="field"
-              :class="{ invalid: cronError(row.shutdownCron) }"
-              @input="updateVm(row, { shutdownCron: $event.target.value })"
-            />
-            <p
-              v-if="cronError(row.shutdownCron)"
-              class="text-error hint"
-            >
-              {{ cronError(row.shutdownCron) }}
-            </p>
-          </div>
-          <div>
-            <label class="label">Power-on schedule (cron)</label>
-            <input
-              :value="row.poweronCron"
-              type="text"
-              spellcheck="false"
-              placeholder="0 7 * * *  (empty = none)"
-              class="field"
-              :class="{ invalid: cronError(row.poweronCron) }"
-              @input="updateVm(row, { poweronCron: $event.target.value })"
-            />
-            <p
-              v-if="cronError(row.poweronCron)"
-              class="text-error hint"
-            >
-              {{ cronError(row.poweronCron) }}
-            </p>
-          </div>
-        </div>
-      </div>
+      <template v-if="unassignedVms.length">
+        <h3 class="mt-30">
+          Stopped VMs without a node
+        </h3>
+        <p class="text-muted hint">
+          These VMs aren't running, so they have no node right now. Their schedules work the same way;
+          on power-on, Kubernetes picks the node. Once one runs, it moves under that node.
+        </p>
+        <VmScheduleRow
+          v-for="row in unassignedVms"
+          :key="row.vm"
+          :value="row"
+          @update="updateVm(row.vm, $event)"
+        />
+      </template>
 
       <div
         v-if="problems.length"
@@ -618,21 +629,17 @@ export default {
   }
   .example { margin-right: 12px; white-space: nowrap; }
   .hint { margin: 4px 0; font-size: 0.9em; }
-  .vm-row {
-    border: 1px solid var(--border, #ccc);
-    border-radius: var(--border-radius, 4px);
-    padding: 8px 14px;
-    margin-top: 6px;
-    &.enabled { border-color: var(--primary, #0055a4); }
-    .head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; cursor: pointer; }
-    .title { font-weight: 600; overflow-wrap: anywhere; }
-  }
   .mb-10 { margin-bottom: 10px; } .mb-20 { margin-bottom: 20px; }
   .mt-10 { margin-top: 10px; } .mt-20 { margin-top: 20px; } .mt-30 { margin-top: 30px; }
   .banner-error {
     padding: 10px 12px; border-radius: 6px;
     background: rgba(200, 0, 0, 0.1); border: 1px solid rgba(200, 0, 0, 0.3);
   }
+  .banner-warning {
+    padding: 10px 12px; border-radius: 6px;
+    background: rgba(230, 150, 0, 0.1); border: 1px solid rgba(230, 150, 0, 0.4);
+  }
+  .checkbox-inline { display: inline-flex; gap: 6px; align-items: center; margin-left: 8px; cursor: pointer; font-weight: 600; }
   .banner-info {
     padding: 10px 12px; border-radius: 6px;
     background: rgba(0, 85, 164, 0.08); border: 1px solid rgba(0, 85, 164, 0.3);

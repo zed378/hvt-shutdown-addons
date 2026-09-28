@@ -21,6 +21,10 @@ import ForkliftVmMigrationWizard from '../pages/c/_cluster/vm-migration/vm-migra
 import ForkliftProviderWizard from '../pages/c/_cluster/vm-migration/provider-wizard.vue';
 import HarvesterNodeShutdown from '../pages/c/_cluster/node-shutdown/index.vue';
 import HarvesterNodePoweron from '../pages/c/_cluster/node-poweron/index.vue';
+import HarvesterVpnNetbird from '../pages/c/_cluster/vpn/netbird.vue';
+import HarvesterVpnTailscale from '../pages/c/_cluster/vpn/tailscale.vue';
+import HarvesterVpnZerotier from '../pages/c/_cluster/vpn/zerotier.vue';
+import HarvesterVpnOpenvpn from '../pages/c/_cluster/vpn/openvpn.vue';
 
 const routes = [
   {
@@ -108,6 +112,23 @@ const routes = [
     name:      `${ PRODUCT_NAME }-c-cluster-node-poweron`,
     path:      `/:product/c/:cluster/node-poweron`,
     component: HarvesterNodePoweron,
+  }, {
+    // VPN add-on — one page per provider, all editing the single `vpn` add-on.
+    name:      `${ PRODUCT_NAME }-c-cluster-vpn-netbird`,
+    path:      `/:product/c/:cluster/vpn/netbird`,
+    component: HarvesterVpnNetbird,
+  }, {
+    name:      `${ PRODUCT_NAME }-c-cluster-vpn-tailscale`,
+    path:      `/:product/c/:cluster/vpn/tailscale`,
+    component: HarvesterVpnTailscale,
+  }, {
+    name:      `${ PRODUCT_NAME }-c-cluster-vpn-zerotier`,
+    path:      `/:product/c/:cluster/vpn/zerotier`,
+    component: HarvesterVpnZerotier,
+  }, {
+    name:      `${ PRODUCT_NAME }-c-cluster-vpn-openvpn`,
+    path:      `/:product/c/:cluster/vpn/openvpn`,
+    component: HarvesterVpnOpenvpn,
   }, {
     name:      `${ PRODUCT_NAME }-c-cluster-resource`,
     path:      `/:product/c/:cluster/:resource`,
