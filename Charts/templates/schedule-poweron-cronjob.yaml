@@ -40,19 +40,11 @@ spec:
                 - name: TARGET_VMS
                   value: {{ .Values.poweronSchedule.vms | default list | toJson | quote }}
                 - name: NODE_BMC
-                  value: {{ .Values.nodeBmc | default dict | toJson | quote }}
+                  value: {{ .Values.nodeBmc | default dict | keys | sortAlpha | toJson | quote }}
                 - name: WAIT_FOR_READY
                   value: {{ .Values.poweronSchedule.waitForReady | default true | quote }}
                 - name: TIMEOUT_SECONDS
                   value: {{ .Values.poweronSchedule.timeoutSeconds | default 300 | quote }}
-                {{- if .Values.ipmi }}
-                - name: IPMI_USER
-                  value: {{ .Values.ipmi.user | default "admin" | quote }}
-                {{- if .Values.ipmi.password }}
-                - name: IPMI_PASSWORD
-                  value: {{ .Values.ipmi.password | quote }}
-                {{- end }}
-                {{- end }}
               command: ["python", "-c"]
               args:
                 - |
@@ -60,18 +52,15 @@ spec:
                   token = os.environ["AUTH_TOKEN"]
                   nodes = json.loads(os.environ.get("TARGET_NODES", "[]"))
                   vms = json.loads(os.environ.get("TARGET_VMS", "[]"))
-                  node_bmc = json.loads(os.environ.get("NODE_BMC", "{}"))
-                  user = os.environ.get("IPMI_USER", "admin")
-                  pwd = os.environ.get("IPMI_PASSWORD", "")
+                  # BMC IPs/credentials are resolved by the API from its mounted
+                  # BMC Secret; empty nodes = every node that has a BMC entry.
+                  nodes = nodes or json.loads(os.environ.get("NODE_BMC", "[]"))
                   wait_ready = os.environ.get("WAIT_FOR_READY", "true").lower() == "true"
                   timeout = int(os.environ.get("TIMEOUT_SECONDS", "300"))
                   url = os.environ["API_URL"].rstrip("/") + "/system/poweron"
                   payload = {
                       "nodes": nodes,
                       "vms": vms,
-                      "nodeBmc": node_bmc,
-                      "ipmiUser": user,
-                      "ipmiPassword": pwd,
                       "waitForReady": wait_ready,
                       "timeoutSeconds": timeout
                   }

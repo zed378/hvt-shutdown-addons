@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 # ---- Python runtime with FastAPI ----
 # API-only image.
 FROM python:3.11-slim
@@ -17,6 +18,21 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ipmitool \
     && rm -rf /var/lib/apt/lists/*
+
+# kubectl: VM start/stop/migrate is done with `kubectl patch|create|delete`
+# using the pod's in-cluster ServiceAccount (same least-privilege RBAC).
+# Pinned and checksum-verified. Keep within +/-1 minor of the Harvester k8s version.
+ARG KUBECTL_VERSION=v1.31.4
+ARG TARGETARCH=amd64
+RUN python - <<EOF
+import hashlib, os, urllib.request
+base = "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl"
+data = urllib.request.urlopen(base, timeout=120).read()
+want = urllib.request.urlopen(base + ".sha256", timeout=60).read().decode().split()[0]
+assert hashlib.sha256(data).hexdigest() == want, "kubectl checksum mismatch"
+open("/usr/local/bin/kubectl", "wb").write(data)
+os.chmod("/usr/local/bin/kubectl", 0o755)
+EOF
 
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip setuptools wheel \

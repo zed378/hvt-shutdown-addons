@@ -1,0 +1,63 @@
+{{- /*
+Per-node and per-VM power schedules (dashboard "Power Schedules" page).
+Every checked node / VM gets its own shutdown CronJob and its own power-on
+CronJob; an empty cron leaves that direction unscheduled.
+
+  node shutdown : POST /system/shutdown {nodes:[node], vmStrategy, poweroff:true}
+  node power-on : POST /system/poweron  {nodes:[node]}   (IPMI / Redfish via BMC Secret)
+  VM shutdown   : POST /system/vm/stop  {vms:[ns/name]}  (kubectl patch, any node)
+  VM power-on   : POST /system/vm/start {vms:[ns/name]}
+*/ -}}
+{{- range .Values.nodePowerSchedules }}
+{{- if and .node .enabled }}
+{{- if .shutdownCron }}
+---
+{{ include "node-shutdown.triggerCronJob" (dict
+    "root" $
+    "name" (include "node-shutdown.scheduleName" (list "hvt-node" .node .node "off"))
+    "schedule" .shutdownCron
+    "path" "/system/shutdown"
+    "payload" (dict "nodes" (list .node) "vmStrategy" (.vmStrategy | default "migrate") "vms" (list) "poweroff" true)
+    "kind" "node-shutdown"
+    "target" .node) }}
+{{- end }}
+{{- if .poweronCron }}
+---
+{{ include "node-shutdown.triggerCronJob" (dict
+    "root" $
+    "name" (include "node-shutdown.scheduleName" (list "hvt-node" .node .node "on"))
+    "schedule" .poweronCron
+    "path" "/system/poweron"
+    "payload" (dict "nodes" (list .node) "vms" (list) "waitForReady" false)
+    "kind" "node-poweron"
+    "target" .node) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range .Values.vmPowerSchedules }}
+{{- if and .vm .enabled }}
+{{- $name := .vm | splitList "/" | last }}
+{{- if .shutdownCron }}
+---
+{{ include "node-shutdown.triggerCronJob" (dict
+    "root" $
+    "name" (include "node-shutdown.scheduleName" (list "hvt-vm" $name .vm "off"))
+    "schedule" .shutdownCron
+    "path" "/system/vm/stop"
+    "payload" (dict "vms" (list .vm))
+    "kind" "vm-shutdown"
+    "target" .vm) }}
+{{- end }}
+{{- if .poweronCron }}
+---
+{{ include "node-shutdown.triggerCronJob" (dict
+    "root" $
+    "name" (include "node-shutdown.scheduleName" (list "hvt-vm" $name .vm "on"))
+    "schedule" .poweronCron
+    "path" "/system/vm/start"
+    "payload" (dict "vms" (list .vm))
+    "kind" "vm-poweron"
+    "target" .vm) }}
+{{- end }}
+{{- end }}
+{{- end }}

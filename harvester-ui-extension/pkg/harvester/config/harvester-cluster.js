@@ -1301,7 +1301,7 @@ export function init($plugin, store) {
   });
 
   virtualType({
-    label:      'Node Power-on',
+    label:      'Power Schedules',
     group:      'advanced',
     name:       'node-poweron',
     weight:     9,

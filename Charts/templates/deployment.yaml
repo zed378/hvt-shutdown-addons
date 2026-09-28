@@ -128,14 +128,12 @@ spec:
               value: "{{ .Values.nodePort.nodePort }}"
             - name: LISTEN_PORT
               value: "{{ .Values.nodePort.targetPort }}"
-            {{- if .Values.ipmi }}
-            - name: IPMI_DEFAULT_USER
-              value: {{ .Values.ipmi.user | default "admin" | quote }}
-            {{- if .Values.ipmi.password }}
-            - name: IPMI_DEFAULT_PASSWORD
-              value: {{ .Values.ipmi.password | quote }}
-            {{- end }}
-            {{- end }}
+            # BMC (IPMI / Redfish) credentials come from the mounted Secret,
+            # never from plain env vars.
+            - name: BMC_CONFIG_FILE
+              value: "/etc/bmc/bmc.json"
+            - name: VM_CONTROL
+              value: {{ .Values.vmControl | default "kubectl" | quote }}
             {{- if .Values.tls.enabled }}
             - name: TLS_ENABLED
               value: "true"
@@ -158,6 +156,9 @@ spec:
             - name: auth-token
               mountPath: /etc/auth
               readOnly: true
+            - name: bmc-config
+              mountPath: /etc/bmc
+              readOnly: true
             {{- if .Values.tls.enabled }}
             - name: tls-certs
               mountPath: {{ .Values.tls.mountPath }}
@@ -173,6 +174,9 @@ spec:
         - name: auth-token
           secret:
             secretName: {{ .Values.secret.name }}
+        - name: bmc-config
+          secret:
+            secretName: {{ .Values.bmc.secretName }}
         {{- if .Values.tls.enabled }}
         - name: tls-certs
           secret:

@@ -204,16 +204,55 @@ poweronSchedule:
   waitForReady: true      # Wait for Kubernetes node status Ready before starting VMs
   timeoutSeconds: 300     # Maximum seconds to wait for node boot
 
-# IPMI credentials for baremetal power-on
+# ---------------------------------------------------------------------------
+# Power schedules (dashboard "Power Schedules" page). Every CHECKED node and VM
+# has its own shutdown cron AND its own power-on cron; an empty cron leaves that
+# direction unscheduled. Crons are evaluated in `scheduleTimeZone` (UTC if empty).
+#
+# nodePowerSchedules:
+#   - node: "harvester-1"        # Harvester node name
+#     enabled: true              # checkbox
+#     shutdownCron: "0 22 * * 5" # graceful host shutdown (VMs handled per vmStrategy)
+#     poweronCron: "0 6 * * 1"   # power on via BMC (IPMI / Redfish, see nodeBmc)
+#     vmStrategy: "migrate"      # migrate | stop | force — VMs on the node at shutdown
+# vmPowerSchedules:
+#   - vm: "default/web-01"       # namespace/name
+#     enabled: true
+#     shutdownCron: "0 21 * * *" # kubectl patch runStrategy=Halted (any node)
+#     poweronCron: "0 7 * * *"   # kubectl patch runStrategy restored
+# ---------------------------------------------------------------------------
+nodePowerSchedules: []
+vmPowerSchedules: []
+
+# IANA time zone for every schedule CronJob (Kubernetes >= 1.27), e.g.
+# "Asia/Jakarta". Empty = the controller-manager's zone (UTC on Harvester).
+scheduleTimeZone: ""
+
+# How VMs are started/stopped: "kubectl" (kubectl patch inside the pod) or
+# "api" (Python Kubernetes client). Both issue the same API call.
+vmControl: "kubectl"
+
+# Default BMC credentials (used when a node entry has no user/password).
 ipmi:
   user: "admin"
-  password: "" # Base64-encoded or stored in Secret
-  secretName: "node-poweron-ipmi"
+  password: ""
+  secretName: "node-poweron-ipmi" # legacy, unused
 
-# Mapping of Harvester node name to its physical BMC/IPMI IP address
-# Example:
-#   harvester-worker-1:
-#     bmcIp: "192.168.10.51"
+# BMC config Secret (rendered from `ipmi` + `nodeBmc`, mounted into the DaemonSet).
+bmc:
+  secretName: "node-poweron-bmc"
+  protocol: "ipmi" # default protocol: ipmi | redfish
+
+# Per-node BMC / management connection. The management IP is the server's
+# iDRAC / iLO / XCC / IPMI port — NOT the node's host IP. Test it from the
+# dashboard ("Test connection") before enabling a power-on schedule.
+#   harvester-1:
+#     protocol: "redfish"   # ipmi | redfish
+#     host: "10.0.99.51"    # management (BMC) IP
+#     port: 443             # default 623 (ipmi) / 443 (redfish)
+#     user: "admin"
+#     password: "..."
+#     verifyTls: false      # redfish: verify the BMC certificate
 nodeBmc: {}
 
 # Network policy (optional - restricts incoming traffic to the API port).

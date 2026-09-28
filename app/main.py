@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import signal
 import subprocess
 import threading
@@ -17,6 +18,8 @@ from fastapi import FastAPI, HTTPException, Depends, Request, status
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from kubernetes import client, config
+
+from app import bmc
 
 # Grace period in seconds for pod termination (0 = immediate)
 GRACE_PERIOD_SECONDS = int(os.getenv("GRACE_PERIOD_SECONDS", "10"))
@@ -61,6 +64,22 @@ _poweron_status = {
 IPMI_DEFAULT_USER = os.getenv("IPMI_DEFAULT_USER", "admin")
 IPMI_DEFAULT_PASSWORD = os.getenv("IPMI_DEFAULT_PASSWORD", "")
 IPMI_PASSWORD_FILE = os.getenv("IPMI_PASSWORD_FILE")
+
+# Per-node BMC (IPMI / Redfish) config rendered by the chart into a Secret and
+# mounted here. Shape: {"defaults": {...}, "nodes": {"<node>": {"protocol",
+# "host", "port", "user", "password", "verifyTls"}}}. Re-read on every use so
+# edits from the dashboard apply without restarting the DaemonSet.
+BMC_CONFIG_FILE = os.getenv("BMC_CONFIG_FILE", "/etc/bmc/bmc.json")
+
+# How VirtualMachines are started/stopped: "kubectl" runs `kubectl patch` inside
+# the pod (falls back to the Python client when the binary is missing); "api"
+# always uses the Python Kubernetes client. Both make the same API call.
+VM_CONTROL = os.getenv("VM_CONTROL", "kubectl").lower()
+KUBECTL_BIN = os.getenv("KUBECTL_BIN", "kubectl")
+
+# Annotation remembering a VM's runStrategy before we halted it, so a scheduled
+# power-on restores e.g. RerunOnFailure instead of forcing Always.
+PREV_RUN_STRATEGY_ANNOTATION = "node-shutdown.harvesterhci.io/previous-run-strategy"
 
 # Kubernetes API client (initialized lazily)
 k8s_core = None
@@ -241,7 +260,13 @@ def _normalize_vm_refs(refs) -> list[str]:
 security = HTTPBearer(auto_error=False)
 
 
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+# Alternative token header. Calls from the dashboard go through the Kubernetes
+# API service proxy, which consumes (strips) the Authorization header, so the UI
+# sends the token in this header instead.
+TOKEN_HEADER = "x-node-shutdown-token"
+
+
+def verify_token(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Verify authentication token with constant-time comparison."""
     active_token = _current_token()
     if not active_token:
@@ -251,14 +276,15 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
             detail="Authentication service misconfigured",
         )
     # Never log or echo credential material. Compare in constant time.
-    presented = credentials.credentials if credentials else ""
-    if not secrets.compare_digest(presented, active_token):
+    presented = credentials.credentials if credentials else (request.headers.get(TOKEN_HEADER) or "")
+    # Compare bytes: compare_digest raises TypeError on non-ASCII str input.
+    if not secrets.compare_digest(presented.encode(), active_token.encode()):
         logger.warning("Failed authentication attempt (invalid or missing token)")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing authentication token",
         )
-    return credentials.credentials
+    return presented
 
 
 @asynccontextmanager
@@ -506,33 +532,44 @@ def _current_ipmi_password() -> str:
     return IPMI_DEFAULT_PASSWORD
 
 
-def _run_ipmi_command(bmc_ip: str, user: str, password: str, subcmd: list[str]) -> tuple[bool, str]:
-    """Execute an ipmitool command against a target BMC using IPMI-over-LAN (lanplus)."""
-    cmd = ["ipmitool", "-I", "lanplus", "-H", bmc_ip, "-U", user, "-P", password] + subcmd
+def _non_empty(d) -> dict:
+    """Drop None/"" values so a blank form field never overrides a stored one.
+
+    Also folds the legacy ``bmcIp`` / ``ip`` keys into ``host`` so entries using
+    different spellings merge predictably.
+    """
+    out = {k: v for k, v in (d or {}).items() if v not in (None, "")}
+    for alias in ("bmcIp", "ip"):
+        val = out.pop(alias, None)
+        if val and "host" not in out:
+            out["host"] = val
+    return out
+
+
+def _load_bmc_config() -> dict:
+    """Read the mounted BMC config Secret, layered over the env defaults."""
+    defaults = {"protocol": "ipmi", "user": IPMI_DEFAULT_USER, "password": _current_ipmi_password()}
+    nodes = {}
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
-        if res.returncode == 0:
-            return True, res.stdout.strip()
-        err_msg = res.stderr.strip() or res.stdout.strip()
-        return False, err_msg
-    except Exception as e:
-        return False, str(e)
+        with open(BMC_CONFIG_FILE, "r") as f:
+            data = json.load(f) or {}
+        defaults.update(_non_empty(data.get("defaults")))
+        nodes = data.get("nodes") or {}
+    except (OSError, ValueError):
+        pass
+    return {"defaults": defaults, "nodes": nodes}
 
 
-def _poweron_node_ipmi(bmc_ip: str, user: str, password: str) -> bool:
-    """Send IPMI chassis power on command to a node's BMC."""
-    ok, out = _run_ipmi_command(bmc_ip, user, password, ["chassis", "power", "status"])
-    if ok and "is on" in out.lower():
-        logger.info(f"Node BMC {bmc_ip} is already powered on ({out})")
-        return True
+def _bmc_for_node(node: str, override: dict = None, default_override: dict = None) -> dict:
+    """Resolve the effective, validated BMC config for a node.
 
-    logger.info(f"Sending IPMI chassis power on to BMC {bmc_ip}...")
-    ok, out = _run_ipmi_command(bmc_ip, user, password, ["chassis", "power", "on"])
-    if not ok:
-        logger.error(f"IPMI power on failed for BMC {bmc_ip}: {out}")
-        return False
-    logger.info(f"IPMI power on sent successfully to BMC {bmc_ip}: {out}")
-    return True
+    Precedence: request override > stored per-node entry > request defaults >
+    stored defaults. Raises bmc.BmcError when unusable.
+    """
+    stored = _load_bmc_config()
+    entry = {**_non_empty(stored["nodes"].get(node)), **_non_empty(override)}
+    defaults = {**stored["defaults"], **_non_empty(default_override)}
+    return bmc.normalize_config(entry, defaults)
 
 
 def _wait_for_node_ready(node_name: str, timeout_seconds: int = 300) -> bool:
@@ -557,27 +594,92 @@ def _wait_for_node_ready(node_name: str, timeout_seconds: int = 300) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# VirtualMachine start/stop — `kubectl patch virtualmachine` (or the Python
+# client when kubectl is unavailable / VM_CONTROL=api).
+# ---------------------------------------------------------------------------
+
+class VmNotFound(Exception):
+    """The VirtualMachine object does not exist (e.g. a standalone VMI)."""
+    status = 404
+
+
+def _use_kubectl() -> bool:
+    return VM_CONTROL == "kubectl" and shutil.which(KUBECTL_BIN) is not None
+
+
+def _kubectl(args: list[str], timeout: int = 30, stdin: str = None) -> str:
+    """Run kubectl with the pod's in-cluster ServiceAccount credentials."""
+    res = subprocess.run([KUBECTL_BIN] + args, capture_output=True, text=True,
+                         timeout=timeout, input=stdin)
+    if res.returncode != 0:
+        err = (res.stderr or res.stdout).strip()
+        if "NotFound" in err or "not found" in err:
+            raise VmNotFound(err)
+        raise RuntimeError(f"kubectl {' '.join(args[:2])} failed: {err}")
+    return res.stdout
+
+
+def _get_vm(ns: str, name: str) -> dict:
+    if _use_kubectl():
+        return json.loads(_kubectl(["get", "virtualmachines.kubevirt.io", name, "-n", ns, "-o", "json"]))
+    return client.CustomObjectsApi().get_namespaced_custom_object(
+        "kubevirt.io", "v1", ns, "virtualmachines", name)
+
+
+def _patch_vm(ns: str, name: str, patch: dict):
+    # Merge patch (an OBJECT): only the keys present are touched, so we never add
+    # `running` to a runStrategy VM (or vice versa).
+    if _use_kubectl():
+        _kubectl(["patch", "virtualmachines.kubevirt.io", name, "-n", ns,
+                  "--type", "merge", "-p", json.dumps(patch)])
+    else:
+        client.CustomObjectsApi().patch_namespaced_custom_object(
+            "kubevirt.io", "v1", ns, "virtualmachines", name, patch)
+
+
+def _delete_vmi(ns: str, name: str):
+    if _use_kubectl():
+        _kubectl(["delete", "virtualmachineinstances.kubevirt.io", name, "-n", ns,
+                  f"--grace-period={GRACE_PERIOD_SECONDS}", "--wait=false"])
+    else:
+        client.CustomObjectsApi().delete_namespaced_custom_object(
+            "kubevirt.io", "v1", ns, "virtualmachineinstances", name,
+            grace_period_seconds=GRACE_PERIOD_SECONDS)
+
+
+def _vm_stop_patch(vm: dict) -> dict:
+    spec = vm.get("spec", {})
+    if "runStrategy" not in spec:
+        return {"spec": {"running": False}}
+    patch = {"spec": {"runStrategy": "Halted"}}
+    if spec["runStrategy"] != "Halted":
+        patch["metadata"] = {"annotations": {PREV_RUN_STRATEGY_ANNOTATION: spec["runStrategy"]}}
+    return patch
+
+
+def _vm_start_patch(vm: dict) -> dict:
+    spec = vm.get("spec", {})
+    if "runStrategy" not in spec:
+        return {"spec": {"running": True}}
+    prev = (vm.get("metadata", {}).get("annotations") or {}).get(PREV_RUN_STRATEGY_ANNOTATION)
+    strategy = prev if prev in ("Always", "RerunOnFailure", "Once") else "Always"
+    # null removes the annotation in a merge patch.
+    return {"spec": {"runStrategy": strategy},
+            "metadata": {"annotations": {PREV_RUN_STRATEGY_ANNOTATION: None}}}
+
+
 def _start_virtual_machines(vms: list[str]) -> int:
-    """Start target KubeVirt VirtualMachines by patching them to running/Always."""
+    """Start target KubeVirt VirtualMachines (runStrategy restored / running=true)."""
+    vms = _normalize_vm_refs(vms)
     if not vms:
         return 0
-    custom = client.CustomObjectsApi()
     started = 0
-    logger.info(f"Starting {len(vms)} VirtualMachine(s)...")
+    logger.info(f"Starting {len(vms)} VirtualMachine(s) via {'kubectl' if _use_kubectl() else 'API'}...")
     for vm_ref in vms:
-        parts = vm_ref.split("/", 1)
-        if len(parts) == 2:
-            ns, name = parts
-        else:
-            ns, name = "default", parts[0]
+        ns, _, name = vm_ref.partition("/")
         try:
-            vm = custom.get_namespaced_custom_object("kubevirt.io", "v1", ns, "virtualmachines", name)
-            spec = vm.get("spec", {})
-            if "runStrategy" in spec:
-                patch = {"spec": {"runStrategy": "Always"}}
-            else:
-                patch = {"spec": {"running": True}}
-            custom.patch_namespaced_custom_object("kubevirt.io", "v1", ns, "virtualmachines", name, patch)
+            _patch_vm(ns, name, _vm_start_patch(_get_vm(ns, name)))
             logger.info(f"Successfully started VirtualMachine {ns}/{name}")
             started += 1
         except Exception as e:
@@ -588,50 +690,54 @@ def _start_virtual_machines(vms: list[str]) -> int:
 def run_poweron_sequence(
     target_nodes: list[str],
     target_vms: list[str],
-    node_bmc_map: dict,
-    default_user: str,
-    default_pass: str,
+    node_overrides: dict,
+    default_override: dict,
     wait_for_ready: bool = True,
     timeout_seconds: int = 300,
+    wait_nodes: list[str] = None,
+    holds_lock: bool = True,
 ):
-    """Background thread executing the full IPMI node wake-up and VM start sequence."""
+    """Background thread: BMC power-on (IPMI/Redfish), wait for Ready, start VMs."""
     global _poweron_in_progress, _poweron_status
     try:
         _poweron_status = {
             "state": "running",
-            "detail": f"Powering on {len(target_nodes)} node(s) via IPMI",
+            "detail": f"Powering on {len(target_nodes)} node(s) via BMC",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-        # 1. Baremetal power-on via IPMI
-        powered_nodes = []
+        # 1. Baremetal power-on via the node's BMC (management IP, not host IP)
+        powered_nodes, failed_nodes = [], {}
         for node in target_nodes:
-            bmc_info = node_bmc_map.get(node, {})
-            bmc_ip = bmc_info.get("bmcIp") or bmc_info.get("ip")
-            user = bmc_info.get("user") or default_user
-            pwd = bmc_info.get("password") or default_pass
-            if not bmc_ip:
-                logger.warning(f"No BMC IP configured for node '{node}', skipping IPMI power-on")
-                continue
-            logger.info(f"Triggering IPMI power-on for node '{node}' at BMC {bmc_ip}")
-            if _poweron_node_ipmi(bmc_ip, user, pwd):
+            try:
+                cfg = _bmc_for_node(node, (node_overrides or {}).get(node), default_override)
+                logger.info(f"Powering on node '{node}' via {cfg['protocol']} at {cfg['host']}:{cfg['port']}")
+                result = bmc.power_on(cfg)
+                logger.info(f"Node '{node}' BMC power-on: {result}")
                 powered_nodes.append(node)
+            except bmc.BmcError as e:
+                logger.error(f"BMC power-on failed for node '{node}': {e}")
+                failed_nodes[node] = str(e)
 
-        # 2. Wait for powered-on nodes to become Ready
-        if wait_for_ready and powered_nodes:
-            _poweron_status["detail"] = f"Waiting for node(s) {powered_nodes} to become Ready"
-            for node in powered_nodes:
+        # 2. Wait for powered-on (and explicitly awaited) nodes to become Ready
+        to_wait = list(dict.fromkeys(powered_nodes + list(wait_nodes or [])))
+        if wait_for_ready and to_wait:
+            _poweron_status["detail"] = f"Waiting for node(s) {to_wait} to become Ready"
+            for node in to_wait:
                 _wait_for_node_ready(node, timeout_seconds=timeout_seconds)
 
         # 3. Start target VMs
+        started_count = 0
         if target_vms:
             _poweron_status["detail"] = f"Powering on {len(target_vms)} target VirtualMachine(s)"
             started_count = _start_virtual_machines(target_vms)
             logger.info(f"Power-on sequence started {started_count} VirtualMachine(s)")
 
         _poweron_status = {
-            "state": "completed",
-            "detail": f"Power-on sequence finished (nodes: {len(powered_nodes)}, vms: {len(target_vms)})",
+            "state": "error" if failed_nodes else "completed",
+            "detail": (f"Power-on sequence finished (nodes: {len(powered_nodes)}/{len(target_nodes)}, "
+                       f"vms: {started_count}/{len(target_vms)})"),
+            "failedNodes": failed_nodes,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
@@ -642,8 +748,79 @@ def run_poweron_sequence(
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     finally:
-        with _poweron_lock:
-            _poweron_in_progress = False
+        if holds_lock:
+            with _poweron_lock:
+                _poweron_in_progress = False
+
+
+async def _json_body(request: Request) -> dict:
+    try:
+        raw = await request.body()
+        body = json.loads(raw) if raw else {}
+        return body if isinstance(body, dict) else {}
+    except Exception:
+        return {}
+
+
+@app.post("/system/bmc/test", dependencies=[Depends(verify_token)])
+async def test_bmc_connection(request: Request):
+    """Test IPMI / Redfish connectivity to a server's management (BMC) IP.
+
+    JSON body (fields left empty fall back to the saved config of ``node``):
+    {
+      "node": "harvester-1",
+      "protocol": "ipmi" | "redfish",
+      "host": "10.0.99.51",          # management IP — NOT the node's host IP
+      "port": 623,                    # default 623 (ipmi) / 443 (redfish)
+      "user": "admin",
+      "password": "...",
+      "verifyTls": false              # redfish only
+    }
+    Always 200 with {"ok": bool, ...} so the dashboard can show the reason.
+    """
+    if not rate_limiter.is_allowed(_client_ip(request)):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Try again later.",
+        )
+    body = await _json_body(request)
+    node = str(body.get("node") or "")
+    override = {k: body.get(k) for k in ("protocol", "host", "bmcIp", "port", "user", "password", "verifyTls")}
+    started = time.time()
+    try:
+        cfg = _bmc_for_node(node, override)
+        info = await asyncio.to_thread(bmc.test_connection, cfg)
+    except bmc.BmcError as e:
+        logger.info(f"BMC test for node '{node or '-'}' failed: {e}")
+        return {"ok": False, "error": str(e), "node": node,
+                "durationMs": int((time.time() - started) * 1000)}
+    logger.info(f"BMC test for node '{node or '-'}' OK via {cfg['protocol']} {cfg['host']}:{cfg['port']}")
+    return {"ok": True, "node": node, "host": cfg["host"], "port": cfg["port"],
+            "testedFrom": NODE_NAME, "durationMs": int((time.time() - started) * 1000), **info}
+
+
+@app.post("/system/vm/{action}", dependencies=[Depends(verify_token)])
+async def vm_power(action: str, request: Request):
+    """Start or stop specific VirtualMachines, independent of the node they run on.
+
+    POST /system/vm/start | /system/vm/stop   body: {"vms": ["ns/name", ...]}
+    Used by the per-VM power schedules. Runs in the background; idempotent.
+    """
+    if action not in ("start", "stop"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown action")
+    if not rate_limiter.is_allowed(_client_ip(request)):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Try again later.",
+        )
+    vms = _normalize_vm_refs((await _json_body(request)).get("vms"))
+    if not vms:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No VMs given")
+    fn = _start_virtual_machines if action == "start" else _stop_virtual_machines
+    logger.info(f"VM {action} requested for {vms}")
+    threading.Thread(target=fn, args=(vms,), daemon=True, name=f"vm-{action}").start()
+    return {"status": f"VM {action} initiated", "vms": vms,
+            "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/system/poweron/status", dependencies=[Depends(verify_token)])
@@ -658,18 +835,21 @@ async def get_poweron_status():
 
 @app.post("/system/poweron", dependencies=[Depends(verify_token)])
 async def execute_poweron(request: Request):
-    """Execute coordinated power-on for baremetal nodes (via IPMI) and VMs.
+    """Power on baremetal nodes via their BMC (IPMI/Redfish) and/or start VMs.
 
     JSON body:
     {
-      "nodes": ["worker-1"],
-      "vms": ["default/vm1"],
-      "nodeBmc": {"worker-1": {"bmcIp": "192.168.1.51"}},
-      "ipmiUser": "admin",
-      "ipmiPassword": "...",
+      "nodes": ["worker-1"],           # BMC power-on; config resolved from the
+                                       # mounted BMC Secret unless overridden
+      "vms": ["default/vm1"],          # VirtualMachines to start afterwards
+      "waitNodes": ["worker-1"],       # also wait for these to be Ready first
+      "nodeBmc": {"worker-1": {"protocol": "redfish", "host": "10.0.99.51"}},
+      "ipmiUser": "admin", "ipmiPassword": "...",   # legacy default override
       "waitForReady": true,
       "timeoutSeconds": 300
     }
+    Only requests that power on nodes take the power-on lock; a VM-only start
+    (idempotent) may run alongside it, e.g. node and VM crons at the same time.
     """
     global _poweron_in_progress
 
@@ -680,35 +860,34 @@ async def execute_poweron(request: Request):
             detail="Rate limit exceeded. Try again later.",
         )
 
-    with _poweron_lock:
-        if _poweron_in_progress:
-            logger.warning("Power-on already in progress, ignoring duplicate request")
-            return JSONResponse(
-                status_code=status.HTTP_409_CONFLICT,
-                content={"detail": "Power-on sequence already in progress"},
-            )
-        _poweron_in_progress = True
-
-    req_body = {}
+    req_body = await _json_body(request)
+    target_nodes = [str(n) for n in (req_body.get("nodes") or []) if n]
+    target_vms = _normalize_vm_refs(req_body.get("vms"))
+    wait_nodes = [str(n) for n in (req_body.get("waitNodes") or []) if n]
+    node_overrides = req_body.get("nodeBmc") or {}
+    default_override = {"user": req_body.get("ipmiUser"), "password": req_body.get("ipmiPassword")}
+    wait_for_ready = bool(req_body.get("waitForReady", True))
     try:
-        raw = await request.body()
-        if raw:
-            req_body = json.loads(raw)
-    except Exception:
-        req_body = {}
+        timeout_seconds = int(req_body.get("timeoutSeconds", 300))
+    except (TypeError, ValueError):
+        timeout_seconds = 300
 
-    target_nodes = req_body.get("nodes") or []
-    target_vms = req_body.get("vms") or []
-    node_bmc_map = req_body.get("nodeBmc") or {}
-    default_user = req_body.get("ipmiUser") or IPMI_DEFAULT_USER
-    default_pass = req_body.get("ipmiPassword") or _current_ipmi_password()
-    wait_for_ready = req_body.get("waitForReady", True)
-    timeout_seconds = int(req_body.get("timeoutSeconds", 300))
+    holds_lock = bool(target_nodes)
+    if holds_lock:
+        with _poweron_lock:
+            if _poweron_in_progress:
+                logger.warning("Power-on already in progress, ignoring duplicate request")
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content={"detail": "Power-on sequence already in progress"},
+                )
+            _poweron_in_progress = True
 
-    logger.info(f"Power-on initiated: nodes={target_nodes}, vms={target_vms}")
+    logger.info(f"Power-on initiated: nodes={target_nodes}, vms={target_vms}, waitNodes={wait_nodes}")
     thread = threading.Thread(
         target=run_poweron_sequence,
-        args=(target_nodes, target_vms, node_bmc_map, default_user, default_pass, wait_for_ready, timeout_seconds),
+        args=(target_nodes, target_vms, node_overrides, default_override,
+              wait_for_ready, timeout_seconds, wait_nodes, holds_lock),
         daemon=True,
         name="poweron-daemon",
     )
@@ -934,11 +1113,15 @@ def _force_kill_vms_on_node(target_vms: list[str] = None) -> int:
         pod_name = pod.metadata.name
         pod_ns = pod.metadata.namespace
         try:
-            k8s_core.delete_namespaced_pod(
-                name=pod_name,
-                namespace=pod_ns,
-                body=client.V1DeleteOptions(grace_period_seconds=0),
-            )
+            if _use_kubectl():
+                _kubectl(["delete", "pod", pod_name, "-n", pod_ns,
+                          "--grace-period=0", "--force", "--wait=false"])
+            else:
+                k8s_core.delete_namespaced_pod(
+                    name=pod_name,
+                    namespace=pod_ns,
+                    body=client.V1DeleteOptions(grace_period_seconds=0),
+                )
             logger.info(f"Force-killed virt-launcher pod {pod_ns}/{pod_name}")
             killed += 1
         except Exception as e:
@@ -993,32 +1176,36 @@ def _stop_vms_on_node(target_vms: list[str] = None):
     for vmi in on_node:
         name = vmi["metadata"]["name"]
         ns = vmi["metadata"]["namespace"]
-        try:
-            vm = custom.get_namespaced_custom_object("kubevirt.io", "v1", ns, "virtualmachines", name)
-            spec = vm.get("spec", {})
-            # Merge patch (an OBJECT). The client sends these as
-            # application/merge-patch+json, so a JSON-Patch array is rejected with
-            # "error decoding patch: json: cannot unmarshal array into Go value of
-            # type map[string]interface {}". Only the key present here is touched,
-            # so we never add `running` to a runStrategy VM (or vice versa).
-            if "runStrategy" in spec:
-                patch = {"spec": {"runStrategy": "Halted"}}
-            else:
-                patch = {"spec": {"running": False}}
-            custom.patch_namespaced_custom_object("kubevirt.io", "v1", ns, "virtualmachines", name, patch)
-            logger.info(f"Requested stop of VM {ns}/{name}")
-        except Exception as e:
-            if getattr(e, "status", None) == 404:
-                try:
-                    custom.delete_namespaced_custom_object(
-                        "kubevirt.io", "v1", ns, "virtualmachineinstances", name,
-                        grace_period_seconds=GRACE_PERIOD_SECONDS)
-                    logger.info(f"Deleted standalone VMI {ns}/{name}")
-                except Exception as de:
-                    logger.error(f"Failed to delete VMI {ns}/{name}: {de}")
-            else:
-                logger.error(f"Failed to stop VM {ns}/{name}: {e}")
+        _stop_vm(ns, name)
     _wait_for_no_virt_launchers(max(VM_SHUTDOWN_TIMEOUT, 60))
+
+
+def _stop_vm(ns: str, name: str) -> bool:
+    """Gracefully stop one VM (Halted / running=false); delete it if it is a standalone VMI."""
+    try:
+        # Merge patch (an OBJECT). A JSON-Patch array is rejected with
+        # "cannot unmarshal array into Go value of type map[string]interface {}".
+        _patch_vm(ns, name, _vm_stop_patch(_get_vm(ns, name)))
+        logger.info(f"Requested stop of VM {ns}/{name}")
+        return True
+    except Exception as e:
+        if getattr(e, "status", None) != 404:
+            logger.error(f"Failed to stop VM {ns}/{name}: {e}")
+            return False
+    try:
+        _delete_vmi(ns, name)
+        logger.info(f"Deleted standalone VMI {ns}/{name}")
+        return True
+    except Exception as de:
+        logger.error(f"Failed to delete VMI {ns}/{name}: {de}")
+        return False
+
+
+def _stop_virtual_machines(vms: list[str]) -> int:
+    """Stop the given "namespace/name" VMs wherever they run (node-independent)."""
+    vms = _normalize_vm_refs(vms)
+    logger.info(f"Stopping {len(vms)} VirtualMachine(s) via {'kubectl' if _use_kubectl() else 'API'}...")
+    return sum(1 for ref in vms if _stop_vm(*ref.split("/", 1)))
 
 
 def _migrate_vms_off_node(target_vms: list[str] = None):
@@ -1056,12 +1243,16 @@ def _migrate_vms_off_node(target_vms: list[str] = None):
         migration = {
             "apiVersion": "kubevirt.io/v1",
             "kind": "VirtualMachineInstanceMigration",
-            "metadata": {"generateName": f"evict-{name}-"},
+            "metadata": {"generateName": f"evict-{name}-", "namespace": ns},
             "spec": {"vmiName": name},
         }
         try:
-            custom.create_namespaced_custom_object(
-                "kubevirt.io", "v1", ns, "virtualmachineinstancemigrations", migration)
+            if _use_kubectl():
+                # `create` (not apply) because generateName needs a create call.
+                _kubectl(["create", "-f", "-"], stdin=json.dumps(migration))
+            else:
+                custom.create_namespaced_custom_object(
+                    "kubevirt.io", "v1", ns, "virtualmachineinstancemigrations", migration)
             logger.info(f"Started migration of VMI {ns}/{name}")
         except Exception as e:
             logger.error(f"Failed to start migration for {ns}/{name}: {e}")

@@ -146,7 +146,7 @@ spec:
       template:
         metadata:
           labels:
-            app: node-poweron-schedule
+            app: node-shutdown-schedule
         spec:
           serviceAccountName: {{ $.Values.rbac.serviceAccountName }}
           restartPolicy: Never
