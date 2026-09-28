@@ -177,10 +177,16 @@ schedule:
   vmStrategy: "migrate"
 
 # Per-node schedules (managed from the dashboard Node Shutdown page, one card
-# per node). Each entry holds ONE node cron and ONE VM cron; `vms` lists
-# namespace/name pairs checked in the UI. Empty `vms` targets all VMs on that
-# node. Inert until the CronJob template ranges over it; the legacy `schedule`
-# block above keeps working unchanged.
+# per node). Shape per entry:
+#   node: "node1"            # Harvester node name
+#   nodeEnabled: false       # render the host-shutdown CronJob (nodeCron)
+#   nodeCron: "0 2 * * *"    # when to shut the host down (poweroff: true)
+#   vmEnabled: false         # render the VM-only CronJob (vmCron, poweroff: false)
+#   vmCron: "0 1 * * *"      # single schedule for all selected VMs
+#   vmStrategy: "migrate"    # migrate | stop | force
+#   vms: []                  # namespace/name pairs checked in the UI; empty =
+#                            # all VMs on that node (fail-closed when filtering)
+# The legacy `schedule` block above keeps working unchanged.
 nodeSchedules: []
 
 # Network policy (optional - restricts incoming traffic to the API port).

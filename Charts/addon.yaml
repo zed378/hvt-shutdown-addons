@@ -170,8 +170,9 @@ spec:
       vmStrategy: "migrate"
 
     # Per-node schedules (dashboard Node Shutdown cards). Same shape as
-    # Charts/values.yaml `nodeSchedules`. Inert until the CronJob template
-    # ranges over it; the legacy `schedule` block above keeps working.
+    # Charts/values.yaml `nodeSchedules`: node, nodeEnabled, nodeCron,
+    # vmEnabled, vmCron, vmStrategy, vms (empty = all VMs on that node).
+    # The legacy `schedule` block above keeps working unchanged.
     nodeSchedules: []
 
     # Network policy (optional). NOTE: hostNetwork pods largely bypass

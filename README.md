@@ -205,6 +205,22 @@ curl -X POST "http://VIP:30088/system/shutdown?all_nodes=false" \
   -H "Authorization: Bearer your-secret-token"
 ```
 
+**Optional JSON body:**
+
+```json
+{
+  "nodes": ["node1"],
+  "vmStrategy": "migrate",
+  "vms": ["default/web-01"],
+  "poweroff": true
+}
+```
+
+- `nodes` empty = whole cluster; listed = only those nodes (selected-node shutdown).
+- `vmStrategy` = `stop` | `migrate` | `force` (default `force`).
+- `vms` = restrict the VM phase to these `namespace/name` VMs; empty = all VMs on each target node. Filtering is fail-closed: unmapped names touch nothing.
+- `poweroff` = `false` runs the VM phase only and leaves the host on (used by VM-only schedules).
+
 **Shutdown Behavior:**
 
 1. Rate limit check (configurable requests per minute)
