@@ -26,6 +26,11 @@ GRACE_PERIOD_SECONDS = int(os.getenv("GRACE_PERIOD_SECONDS", "10"))
 # Max time to wait for VMs to shut down before proceeding (seconds)
 VM_SHUTDOWN_TIMEOUT = int(os.getenv("VM_SHUTDOWN_TIMEOUT", "120"))
 
+# Max time to wait for a started VM to become Running, and how long an error
+# such as Unschedulable must persist before the start is reported as failed.
+VM_START_TIMEOUT = int(os.getenv("VM_START_TIMEOUT", str(VM_SHUTDOWN_TIMEOUT)))
+VM_START_ERROR_GRACE = int(os.getenv("VM_START_ERROR_GRACE", "30"))
+
 # Audit logging configuration
 AUDIT_LOG_PATH = os.getenv("AUDIT_LOG_PATH", "/var/log/shutdown-audit.log")
 AUDIT_ENABLED = os.getenv("AUDIT_ENABLED", "true").lower() == "true"
@@ -686,22 +691,99 @@ def _vm_start_patch(vm: dict) -> dict:
             "metadata": {"annotations": {PREV_RUN_STRATEGY_ANNOTATION: None}}}
 
 
-def _start_virtual_machines(vms: list[str]) -> int:
-    """Start target KubeVirt VirtualMachines (runStrategy restored / running=true)."""
+def _vm_error(st: dict) -> str:
+    """Why a starting VM cannot run (e.g. Unschedulable), or "" if none is reported."""
+    for c in st.get("conditions") or []:
+        if c.get("type") == "PodScheduled" and c.get("status") == "False":
+            return f"{c.get('reason') or 'Unschedulable'}: {c.get('message', '')}".strip()
+    ps = st.get("printableStatus", "")
+    if ps.startswith("Error") or ps in ("CrashLoopBackOff", "ErrImagePull", "ImagePullBackOff", "DataVolumeError"):
+        return ps
+    return ""
+
+
+def _vm_halted(vm: dict) -> bool:
+    spec = vm.get("spec", {})
+    return spec.get("runStrategy") == "Halted" or spec.get("running") is False
+
+
+def _wait_vms(refs: list[str], start: bool, timeout_s: int) -> dict:
+    """Poll until each VM is Running (start) or Stopped (stop).
+
+    Returns {"ns/name": reason} for the VMs that did not get there. A start fails
+    early when the VM reports an error (e.g. Unschedulable) for
+    VM_START_ERROR_GRACE seconds, or when it is halted again by someone else.
+    """
+    pending, failures, err_since = set(refs), {}, {}
+    deadline = time.time() + timeout_s
+    while pending:
+        for ref in sorted(pending):
+            ns, _, name = ref.partition("/")
+            try:
+                vm = _get_vm(ns, name)
+            except VmNotFound:
+                # Standalone VMI we deleted on stop; nothing left to wait for.
+                if not start:
+                    pending.discard(ref)
+                else:
+                    failures[ref] = "VirtualMachine not found"
+                    pending.discard(ref)
+                continue
+            except Exception as e:
+                logger.debug(f"Error reading VM {ref}: {e}")
+                continue
+            st = vm.get("status", {})
+            ps = st.get("printableStatus", "")
+            if start:
+                if st.get("ready") is True:
+                    pending.discard(ref)
+                    continue
+                if _vm_halted(vm):
+                    failures[ref] = f"VM was halted again while starting (status {ps or 'unknown'})"
+                    pending.discard(ref)
+                    continue
+                err = _vm_error(st)
+                if err:
+                    if time.time() - err_since.setdefault(ref, time.time()) >= VM_START_ERROR_GRACE:
+                        failures[ref] = err
+                        pending.discard(ref)
+                else:
+                    err_since.pop(ref, None)
+            elif ps == "Stopped" and not st.get("created"):
+                pending.discard(ref)
+        if pending and time.time() >= deadline:
+            for ref in pending:
+                failures[ref] = f"not {'Running' if start else 'Stopped'} after {timeout_s}s"
+            break
+        if pending:
+            time.sleep(3)
+    return failures
+
+
+def _start_virtual_machines(vms: list[str]) -> dict:
+    """Start target KubeVirt VirtualMachines and wait until they are Running.
+
+    Returns {"ns/name": reason} for every VM that failed to start (empty = all Running).
+    """
     vms = _normalize_vm_refs(vms)
     if not vms:
-        return 0
-    started = 0
+        return {}
+    failures, patched = {}, []
     logger.info(f"Starting {len(vms)} VirtualMachine(s) via {'kubectl' if _use_kubectl() else 'API'}...")
     for vm_ref in vms:
         ns, _, name = vm_ref.partition("/")
         try:
             _patch_vm(ns, name, _vm_start_patch(_get_vm(ns, name)))
-            logger.info(f"Successfully started VirtualMachine {ns}/{name}")
-            started += 1
+            patched.append(vm_ref)
         except Exception as e:
-            logger.error(f"Failed to start VirtualMachine {ns}/{name}: {e}")
-    return started
+            failures[vm_ref] = f"start request failed: {e}"
+    failures.update(_wait_vms(patched, True, VM_START_TIMEOUT))
+    for ref in vms:
+        if ref in failures:
+            logger.error(f"Failed to start VirtualMachine {ref}: {failures[ref]}")
+        else:
+            logger.info(f"VirtualMachine {ref} is Running")
+    return failures
 
 
 def run_poweron_sequence(
@@ -744,17 +826,18 @@ def run_poweron_sequence(
                 _wait_for_node_ready(node, timeout_seconds=timeout_seconds)
 
         # 3. Start target VMs
-        started_count = 0
+        failed_vms = {}
         if target_vms:
             _poweron_status["detail"] = f"Powering on {len(target_vms)} target VirtualMachine(s)"
-            started_count = _start_virtual_machines(target_vms)
-            logger.info(f"Power-on sequence started {started_count} VirtualMachine(s)")
+            failed_vms = _start_virtual_machines(target_vms)
+        started_count = len(target_vms) - len(failed_vms)
 
         _poweron_status = {
-            "state": "error" if failed_nodes else "completed",
+            "state": "error" if failed_nodes or failed_vms else "completed",
             "detail": (f"Power-on sequence finished (nodes: {len(powered_nodes)}/{len(target_nodes)}, "
                        f"vms: {started_count}/{len(target_vms)})"),
             "failedNodes": failed_nodes,
+            "failedVms": failed_vms,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
@@ -821,7 +904,9 @@ async def vm_power(action: str, request: Request):
     """Start or stop specific VirtualMachines, independent of the node they run on.
 
     POST /system/vm/start | /system/vm/stop   body: {"vms": ["ns/name", ...]}
-    Used by the per-VM power schedules. Runs in the background; idempotent.
+    Used by the per-VM power schedules. Idempotent. Waits until every VM is
+    Running / Stopped and answers 500 with the per-VM reasons otherwise, so the
+    schedule's Job is marked Failed instead of reporting a false success.
     """
     if action not in ("start", "stop"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown action")
@@ -835,8 +920,13 @@ async def vm_power(action: str, request: Request):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No VMs given")
     fn = _start_virtual_machines if action == "start" else _stop_virtual_machines
     logger.info(f"VM {action} requested for {vms}")
-    threading.Thread(target=fn, args=(vms,), daemon=True, name=f"vm-{action}").start()
-    return {"status": f"VM {action} initiated", "vms": vms,
+    failures = await asyncio.to_thread(fn, vms)
+    if failures:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": f"VM {action} failed", "failed": failures},
+        )
+    return {"status": f"VM {action} completed", "vms": vms,
             "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
@@ -1231,11 +1321,19 @@ def _stop_vm(ns: str, name: str) -> bool:
         return False
 
 
-def _stop_virtual_machines(vms: list[str]) -> int:
-    """Stop the given "namespace/name" VMs wherever they run (node-independent)."""
+def _stop_virtual_machines(vms: list[str]) -> dict:
+    """Stop the given "namespace/name" VMs wherever they run and wait until Stopped.
+
+    Returns {"ns/name": reason} for every VM that did not stop (empty = all Stopped).
+    """
     vms = _normalize_vm_refs(vms)
     logger.info(f"Stopping {len(vms)} VirtualMachine(s) via {'kubectl' if _use_kubectl() else 'API'}...")
-    return sum(1 for ref in vms if _stop_vm(*ref.split("/", 1)))
+    requested = [ref for ref in vms if _stop_vm(*ref.split("/", 1))]
+    failures = {ref: "stop request failed" for ref in vms if ref not in requested}
+    failures.update(_wait_vms(requested, False, max(VM_SHUTDOWN_TIMEOUT, 60)))
+    for ref, reason in failures.items():
+        logger.error(f"Failed to stop VirtualMachine {ref}: {reason}")
+    return failures
 
 
 def _migrate_vms_off_node(target_vms: list[str] = None):

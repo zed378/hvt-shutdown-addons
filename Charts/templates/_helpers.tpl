@@ -57,10 +57,13 @@ spec:
                   value: {{ .path | quote }}
                 - name: PAYLOAD
                   value: {{ .payload | toJson | quote }}
+                # VM start/stop answer only once the VM is Running/Stopped.
+                - name: REQUEST_TIMEOUT
+                  value: {{ add $root.Values.vmShutdownTimeout 90 | quote }}
               command: ["python", "-c"]
               args:
                 - |
-                  import os, ssl, urllib.request
+                  import os, ssl, sys, urllib.error, urllib.request
                   url = os.environ["API_URL"].rstrip("/") + os.environ["API_PATH"]
                   ctx = None
                   if url.startswith("https"):
@@ -72,7 +75,13 @@ spec:
                       headers={"Authorization": "Bearer " + os.environ["AUTH_TOKEN"],
                                "Content-Type": "application/json"})
                   print("POST", os.environ["API_PATH"], os.environ["PAYLOAD"])
-                  print(urllib.request.urlopen(req, timeout=30, context=ctx).read().decode())
+                  try:
+                      with urllib.request.urlopen(req, timeout=int(os.environ["REQUEST_TIMEOUT"]), context=ctx) as res:
+                          print(res.status, res.read().decode())
+                  except urllib.error.HTTPError as e:
+                      # Non-2xx: fail the Job so the run is recorded as failed.
+                      print("FAILED", e.code, e.read().decode())
+                      sys.exit(1)
 {{- end }}
 
 {{/*
