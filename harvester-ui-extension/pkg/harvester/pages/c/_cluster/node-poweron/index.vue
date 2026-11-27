@@ -658,7 +658,6 @@ export default {
 <style lang="scss" scoped>
 .power-schedules {
   padding: 20px;
-  max-width: 860px;
 
   h3 { margin-bottom: 4px; }
   .count { font-size: 0.8em; font-weight: normal; margin-left: 6px; }
