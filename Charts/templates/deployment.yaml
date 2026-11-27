@@ -132,6 +132,8 @@ spec:
             # never from plain env vars.
             - name: BMC_CONFIG_FILE
               value: "/etc/bmc/bmc.json"
+            - name: ALERTS_CONFIG_FILE
+              value: "/etc/alerts/alerts.json"
             - name: VM_CONTROL
               value: {{ .Values.vmControl | default "kubectl" | quote }}
             # kubectl is chosen per cluster version (host RKE2 kubectl first,
@@ -171,6 +173,9 @@ spec:
             - name: bmc-config
               mountPath: /etc/bmc
               readOnly: true
+            - name: alerts-config
+              mountPath: /etc/alerts
+              readOnly: true
             {{- if .Values.tls.enabled }}
             - name: tls-certs
               mountPath: {{ .Values.tls.mountPath }}
@@ -189,6 +194,10 @@ spec:
         - name: bmc-config
           secret:
             secretName: {{ .Values.bmc.secretName }}
+        - name: alerts-config
+          secret:
+            secretName: {{ .Values.alerts.secretName | default "node-shutdown-alerts" }}
+            optional: true
         {{- if .Values.tls.enabled }}
         - name: tls-certs
           secret:

@@ -9,6 +9,7 @@ In-cluster URL of the shutdown API (ClusterIP of the NodePort service).
 A CronJob that POSTs a JSON payload to the shutdown API with the auth token.
 Call with: dict "root" $ "name" <name> "schedule" <cron> "path" "/system/..."
            "payload" <dict> "kind" <label> "target" <what it acts on>
+           "timeout" <seconds, optional>
 */}}
 {{- define "node-shutdown.triggerCronJob" -}}
 {{- $root := .root -}}
@@ -59,7 +60,7 @@ spec:
                   value: {{ .payload | toJson | quote }}
                 # VM start/stop answer only once the VM is Running/Stopped.
                 - name: REQUEST_TIMEOUT
-                  value: {{ add $root.Values.vmShutdownTimeout 90 | quote }}
+                  value: {{ .timeout | default (add $root.Values.vmShutdownTimeout 90) | quote }}
               command: ["python", "-c"]
               args:
                 - |

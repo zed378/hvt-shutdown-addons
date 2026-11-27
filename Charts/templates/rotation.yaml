@@ -1,0 +1,101 @@
+{{- /*
+Node rotation: three CronJobs driving one nightly round (see values `rotation`),
+the RBAC it needs on top of the base role, and the alert-credentials Secret.
+*/ -}}
+{{- $ns := .Values.daemonset.namespace }}
+{{- $scheduled := list }}
+{{- range .Values.nodePowerSchedules }}
+{{- if and .node .enabled }}{{ $scheduled = append $scheduled .node }}{{ end }}
+{{- end }}
+{{- $vmStops := list }}
+{{- range .Values.vmPowerSchedules }}
+{{- if and .vm .enabled .shutdownCron }}{{ $vmStops = append $vmStops .vm }}{{ end }}
+{{- end }}
+{{- $cfg := merge (dict "scheduledNodes" $scheduled "scheduledStopVms" $vmStops "returnHome" .Values.returnHome) (omit .Values.rotation "enabled" "migrateCron" "deadlineCron" "poweronCron") }}
+{{- if .Values.rotation.enabled }}
+---
+{{ include "node-shutdown.triggerCronJob" (dict
+    "root" $ "name" "hvt-rotation-drain" "schedule" .Values.rotation.migrateCron
+    "path" "/system/rotation/drain" "payload" $cfg "kind" "rotation-drain" "target" "rotation"
+    "timeout" 120) }}
+---
+{{ include "node-shutdown.triggerCronJob" (dict
+    "root" $ "name" "hvt-rotation-deadline" "schedule" .Values.rotation.deadlineCron
+    "path" "/system/rotation/deadline" "payload" $cfg "kind" "rotation-deadline" "target" "rotation"
+    "timeout" 180) }}
+---
+{{ include "node-shutdown.triggerCronJob" (dict
+    "root" $ "name" "hvt-rotation-on" "schedule" .Values.rotation.poweronCron
+    "path" "/system/rotation/poweron" "payload" $cfg "kind" "rotation-poweron" "target" "rotation"
+    "timeout" (add .Values.rotation.poweronTimeoutSeconds .Values.returnHome.timeoutSeconds 600)) }}
+{{- end }}
+---
+# Cordon/uncordon nodes and record events (rotation, return-home). Kept out of
+# values `rbac.rules` so existing add-on values that override that list still
+# get these permissions.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Values.rbac.clusterRoleName }}-rotation
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachineinstancemigrations"]
+    verbs: ["get", "list", "create"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.rbac.clusterRoleBindingName }}-rotation
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.rbac.serviceAccountName }}
+    namespace: {{ .Values.rbac.serviceAccountNamespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ .Values.rbac.clusterRoleName }}-rotation
+  apiGroup: rbac.authorization.k8s.io
+---
+# Rotation state ConfigMap + events, only in the add-on namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.daemonset.name }}-rotation
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.daemonset.name }}-rotation
+  namespace: {{ $ns }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.rbac.serviceAccountName }}
+    namespace: {{ .Values.rbac.serviceAccountNamespace }}
+roleRef:
+  kind: Role
+  name: {{ .Values.daemonset.name }}-rotation
+  apiGroup: rbac.authorization.k8s.io
+---
+{{- /* Created empty once; the dashboard edits it. Existing content is kept. */}}
+{{- $existing := lookup "v1" "Secret" $ns .Values.alerts.secretName }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.alerts.secretName }}
+  namespace: {{ $ns }}
+type: Opaque
+data:
+  alerts.json: {{ if and $existing $existing.data (index $existing.data "alerts.json") }}{{ index $existing.data "alerts.json" }}{{ else }}{{ "{}" | b64enc }}{{ end }}

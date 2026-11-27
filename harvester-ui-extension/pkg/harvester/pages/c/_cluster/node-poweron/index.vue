@@ -1,7 +1,10 @@
 <script>
 import jsyaml from 'js-yaml';
+import Tabbed from '@shell/components/Tabbed';
+import Tab from '@shell/components/Tabbed/Tab';
 import NodeScheduleCard from './NodeScheduleCard.vue';
 import VmScheduleRow from './VmScheduleRow.vue';
+import RotationTab, { rotationDefaults, returnHomeDefaults, rotationProblems } from './RotationTab.vue';
 import { cronError, CRON_EXAMPLES } from './cron';
 
 const ADDON_TYPE = 'harvesterhci.io.addon';
@@ -74,12 +77,17 @@ function b64decode(s) {
 export default {
   name: 'HarvesterPowerSchedules',
 
-  components: { NodeScheduleCard, VmScheduleRow },
+  components: {
+    NodeScheduleCard, VmScheduleRow, Tabbed, Tab, RotationTab
+  },
 
   data() {
     return {
       addon:          null,
       values:         {},
+      rotation:       rotationDefaults(),
+      returnHome:     returnHomeDefaults(),
+      nodes:          [],
       token:          '',
       timeZone:       '',
       nodeCards:      [],
@@ -113,6 +121,8 @@ export default {
       return;
     }
     this.values = parsed;
+    this.rotation = { ...rotationDefaults(), ...parsed.rotation };
+    this.returnHome = { ...returnHomeDefaults(), ...parsed.returnHome };
     this.timeZone = parsed.scheduleTimeZone || '';
     // The old cluster-wide schedule (formerly on the Node Shutdown page) is no
     // longer editable; surface it so it can be switched off.
@@ -144,6 +154,7 @@ export default {
     try {
       const nodes = await this.$store.dispatch('harvester/findAll', { type: 'node' });
 
+      this.nodes = nodes || [];
       (nodes || []).forEach((n) => {
         const name = n.metadata?.name;
 
@@ -280,7 +291,7 @@ export default {
       return this.vmRows.filter((r) => r.enabled).length;
     },
     problems() {
-      const out = [];
+      const out = rotationProblems(this.rotation, this.returnHome);
 
       this.nodeCards.filter((c) => c.enabled).forEach((c) => {
         if (cronError(c.shutdownCron) || cronError(c.poweronCron)) {
@@ -324,29 +335,38 @@ export default {
 
     // Calls the API through the Kubernetes service proxy. The proxy consumes the
     // Authorization header, so the token goes in X-Node-Shutdown-Token.
+    async serviceRequest(path, method = 'GET', data) {
+      if (!this.token) {
+        throw new Error('Token akses tidak tersedia.');
+      }
+      const url = this.$store.getters['harvester-common/getHarvesterClusterUrl'](`${ this.apiBase }${ path }`);
+      const res = await this.$store.dispatch('harvester/request', {
+        url,
+        method,
+        headers: {
+          'Content-Type':          'application/json',
+          'X-Node-Shutdown-Token': this.token
+        },
+        ...(data === undefined ? {} : { data }),
+      });
+
+      return res?.data || res;
+    },
+
     async testConnection(node, bmc) {
       if (!this.token) {
         return { ok: false, error: 'No auth token available' };
       }
-      const url = this.$store.getters['harvester-common/getHarvesterClusterUrl'](`${ this.apiBase }/system/bmc/test`);
-
       try {
-        const res = await this.$store.dispatch('harvester/request', {
-          url,
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Node-Shutdown-Token': this.token },
-          data:    {
-            node,
-            protocol:  bmc.protocol,
-            host:      bmc.host,
-            port:      bmc.port ? Number(bmc.port) : undefined,
-            user:      bmc.user,
-            password:  bmc.password,
-            verifyTls: !!bmc.verifyTls,
-          },
+        return await this.serviceRequest('/system/bmc/test', 'POST', {
+          node,
+          protocol:  bmc.protocol,
+          host:      bmc.host,
+          port:      bmc.port ? Number(bmc.port) : undefined,
+          user:      bmc.user,
+          password:  bmc.password,
+          verifyTls: !!bmc.verifyTls,
         });
-
-        return res?.data || res;
       } catch (e) {
         const status = e?._status || e?.status;
 
@@ -362,11 +382,17 @@ export default {
     },
 
     async save() {
+      if (this.problems.length) {
+        return;
+      }
       this.saving = true;
       this.saved = false;
       this.saveError = '';
       try {
         const parsed = jsyaml.load(this.addon?.spec?.valuesContent || '') || {};
+
+        parsed.rotation = { ...parsed.rotation, ...this.rotation };
+        parsed.returnHome = { ...parsed.returnHome, ...this.returnHome };
         const nodeBmc = parsed.nodeBmc || {};
 
         this.nodeCards.forEach((c) => {
@@ -515,61 +541,84 @@ export default {
         </label>
       </div>
 
-      <h3 class="mt-20">
-        Nodes <span class="text-muted count">{{ enabledNodes }} nodes · {{ enabledVms }} VMs scheduled</span>
-      </h3>
-      <p class="text-muted hint">
-        Expand a node to set its own schedule, its BMC connection, and a schedule for each VM on it.
-      </p>
-      <p class="text-warning hint">
-        Power-on runs from a node that is still up. If every node is off, nothing in the cluster can power them back on.
-        Keep at least one node running, or power on from outside the cluster.
-      </p>
-      <p
-        v-if="vmLoadError"
-        class="text-warning"
-      >
-        Could not list VMs: {{ vmLoadError }}
-      </p>
-      <input
-        v-model="vmFilter"
-        type="search"
-        placeholder="Filter VMs by namespace/name"
-        aria-label="Filter VMs"
-        class="field mb-10"
-      >
-      <p
-        v-if="loading"
-        class="text-muted"
-      >
-        Loading nodes and virtual machines…
-      </p>
-      <NodeScheduleCard
-        v-for="(card, i) in nodeCards"
-        :key="card.node"
-        :value="card"
-        :host-ip="hostIps[card.node] || ''"
-        :test-connection="testConnection"
-        :vms="vmsByNode[card.node] || []"
-        @update="onNodeInput(i, $event)"
-        @update-vm="updateVm"
-      />
+      <Tabbed v-if="!loading">
+        <Tab
+          name="node-schedules"
+          label="Jadwal per node"
+          :weight="2"
+        >
+          <h3 class="mt-20">
+            Nodes <span class="text-muted count">{{ enabledNodes }} nodes · {{ enabledVms }} VMs scheduled</span>
+          </h3>
+          <p class="text-muted hint">
+            Expand a node to set its own schedule, its BMC connection, and a schedule for each VM on it.
+          </p>
+          <p class="text-warning hint">
+            Power-on runs from a node that is still up. If every node is off, nothing in the cluster can power them back on.
+            Keep at least one node running, or power on from outside the cluster.
+          </p>
+          <p
+            v-if="vmLoadError"
+            class="text-warning"
+          >
+            Could not list VMs: {{ vmLoadError }}
+          </p>
+          <input
+            v-model="vmFilter"
+            type="search"
+            placeholder="Filter VMs by namespace/name"
+            aria-label="Filter VMs"
+            class="field mb-10"
+          >
+          <p
+            v-if="loading"
+            class="text-muted"
+          >
+            Loading nodes and virtual machines…
+          </p>
+          <NodeScheduleCard
+            v-for="(card, i) in nodeCards"
+            :key="card.node"
+            :value="card"
+            :host-ip="hostIps[card.node] || ''"
+            :test-connection="testConnection"
+            :vms="vmsByNode[card.node] || []"
+            @update="onNodeInput(i, $event)"
+            @update-vm="updateVm"
+          />
 
-      <template v-if="unassignedVms.length">
-        <h3 class="mt-30">
-          Stopped VMs without a node
-        </h3>
-        <p class="text-muted hint">
-          These VMs aren't running, so they have no node right now. Their schedules work the same way;
-          on power-on, Kubernetes picks the node. Once one runs, it moves under that node.
-        </p>
-        <VmScheduleRow
-          v-for="row in unassignedVms"
-          :key="row.vm"
-          :value="row"
-          @update="updateVm(row.vm, $event)"
-        />
-      </template>
+          <template v-if="unassignedVms.length">
+            <h3 class="mt-30">
+              Stopped VMs without a node
+            </h3>
+            <p class="text-muted hint">
+              These VMs aren't running, so they have no node right now. Their schedules work the same way;
+              on power-on, Kubernetes picks the node. Once one runs, it moves under that node.
+            </p>
+            <VmScheduleRow
+              v-for="row in unassignedVms"
+              :key="row.vm"
+              :value="row"
+              @update="updateVm(row.vm, $event)"
+            />
+          </template>
+        </Tab>
+        <Tab
+          name="rotation"
+          label="Rotasi"
+          :weight="1"
+        >
+          <RotationTab
+            :rotation="rotation"
+            :return-home="returnHome"
+            :nodes="nodes"
+            :vms="vmRows.map((r) => r.vm)"
+            :request="serviceRequest"
+            @update-rotation="rotation = $event"
+            @update-return-home="returnHome = $event"
+          />
+        </Tab>
+      </Tabbed>
 
       <div
         v-if="problems.length"
@@ -588,7 +637,7 @@ export default {
         :disabled="saving || loading || !!problems.length"
         @click="save"
       >
-        {{ saving ? 'Saving…' : 'Save' }}
+        {{ saving ? 'Menyimpan…' : 'Simpan' }}
       </button>
       <p
         v-if="saved"
