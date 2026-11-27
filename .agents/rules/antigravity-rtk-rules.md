@@ -1,15 +1,25 @@
 # RTK (Rust Token Killer) Automation Rule
 
-## RTK (Rust Token Killer) Optimization Rule
+## RTK-RG (Rust Token Killer + ripgrep Bridge) Optimization Rule
 Prefix every shell/terminal execution command with `rtk`:
 - `rtk git status`, `rtk git diff`, `rtk git log -n 5`
 - `rtk npm test`, `rtk npm run build`, `rtk pnpm test`, `rtk yarn test`
 - `rtk cargo check`, `rtk cargo test`, `rtk cargo build`
 - `rtk pytest`, `rtk vitest`
-- `rtk ls src/`, `rtk tree -L 2`, `rtk rg "pattern"`
+- `rtk ls src/`, `rtk tree -L 2`, `rtk rg "pattern" .`
 
 Keep the prefix inside chains: `rtk git add . && rtk git commit -m "msg"`.
 Commands RTK has no filter for run as-is, so the prefix is always safe.
+
+### RTK-RG & Windows Built-in Bridge Invariants
+- **Ripgrep / Search Invariants (`rtk rg`)**:
+  - `rtk` and `rg` (upstream `BurntSushi/ripgrep`) are bridged via co-located `rg` binary and `~/.local/bin` shims.
+  - **Never invoke `rg` or `rtk rg` without an explicit target directory** (always use `rtk rg "<pattern>" .`, NEVER bare `rtk rg "<pattern>"`). Omitting the target path in automated command runners causes ripgrep to wait for EOF on stdin indefinitely.
+  - Include `$null | rtk rg ...` or limit search depth with `--max-depth 6` when searching from project roots.
+  - If ripgrep fails (exit code >= 2), fall back to `git grep -n -I "<pattern>"` or PowerShell `Select-String`.
+- **Windows Built-ins & Shims (`ls.cmd`, `dir.cmd`, `grep.cmd`)**:
+  - **Directory listing**: Always prefer `rtk ls <path>` (e.g. `rtk ls src/`) over `rtk dir`. `rtk ls` handles forward slashes natively via the `ls.cmd` bridge shim.
+  - **Never pass forward slashes (`/`) to `rtk dir`**: On Windows, `rtk dir` delegates to `cmd.exe`'s `dir`, which treats `/` as an option switch (`Invalid switch - ""`). If `rtk dir` is used, strip trailing slashes and use backslashes (`rtk dir src\sub`).
 
 ### Output & Token Optimization
 Command output is condensed to save 60-90% LLM context window tokens while preserving every critical signal, error, and exit code.
