@@ -241,16 +241,15 @@ def inventory() -> dict:
         if (p.metadata.labels or {}).get("kubevirt.io") == "virt-launcher":
             uid = (p.metadata.labels or {}).get("kubevirt.io/created-by")
             launchers[uid] = (mem, cpu)
+    vms = {f"{v['metadata']['namespace']}/{v['metadata']['name']}": v
+           for v in custom.list_cluster_custom_object("kubevirt.io", "v1", "virtualmachines").get("items", [])}
     for vmi in custom.list_cluster_custom_object("kubevirt.io", "v1", "virtualmachineinstances").get("items", []):
         node = nodes.get(vmi.get("status", {}).get("nodeName"))
         if not node:
             continue
         meta = vmi["metadata"]
         ref = f"{meta['namespace']}/{meta['name']}"
-        try:
-            vm = m._get_vm(meta["namespace"], meta["name"])
-        except Exception:
-            vm = {"spec": {"template": {"spec": vmi.get("spec", {})}}}
+        vm = vms.get(ref) or {"spec": {"template": {"spec": vmi.get("spec", {})}}}
         mem, cpu = launchers.get(meta.get("uid"), (0.0, 0.0))
         hosts = _allowed_hosts(vm)
         kind = _passthrough(vm)
