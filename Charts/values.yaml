@@ -226,6 +226,51 @@ poweronSchedule:
 nodePowerSchedules: []
 vmPowerSchedules: []
 
+# Nightly node rotation (energy saving): every night `count` nodes are powered
+# off in turn (least recently powered off first) and powered on again in the
+# morning; their VMs move out and come back home. Nodes with an enabled entry
+# in nodePowerSchedules are never rotated.
+#   migrateCron   start moving VMs out; a node powers off as soon as it is empty
+#   deadlineCron  stop VMs still left and power the selected nodes off
+#   poweronCron   BMC power-on, wait Ready, uncordon, migrate VMs back home
+# GPU and pinned VMs are cold-moved: stopped, GPU/pin dropped, started
+# elsewhere; put back on the way home. At most maxControlPlaneOff control-plane nodes go off per
+# round (keeps etcd quorum); nodes in neverOff never go off.
+rotation:
+  enabled: false
+  count: 1
+  migrateCron: "0 18 * * *"
+  deadlineCron: "0 20 * * *"
+  poweronCron: "0 6 * * *"
+  exclude: []
+  neverOff: []
+  maxControlPlaneOff: 1
+  maxNodesOff: 3
+  headroomPercent: 15
+  # VMs pinned to a node (hostname nodeSelector/affinity):
+  #   move     unpin, start elsewhere, re-pin when the node is back (default)
+  #   skipNode never rotate a node that hosts one
+  #   stop     stop them for the night
+  # VMs with a non-GPU passthrough device (e.g. a NIC) always keep their node out.
+  pinnedVms: "move"
+  # VMs to stop for the night (namespace/name), started again at power-on. They
+  # and VMs with an enabled VM shutdown schedule do not count against capacity.
+  stopVms: []
+  poweronTimeoutSeconds: 900
+
+# Migrate VMs back to the node they were moved off (rotation and per-node
+# schedules with vmStrategy migrate) once that node is Ready again.
+returnHome:
+  enabled: true
+  maxParallel: 2
+  timeoutSeconds: 900
+
+# Alert channels (Slack, Teams, email, YouTrack). Credentials live in this
+# Secret (key alerts.json), edited from the dashboard; the chart creates it
+# empty and never overwrites it. Only configured channels send.
+alerts:
+  secretName: "node-shutdown-alerts"
+
 # IANA time zone for every schedule CronJob (Kubernetes >= 1.27), e.g.
 # "Asia/Jakarta". Empty = the controller-manager's zone (UTC on Harvester).
 scheduleTimeZone: ""

@@ -28,7 +28,7 @@ CronJob; an empty cron leaves that direction unscheduled.
     "name" (include "node-shutdown.scheduleName" (list "hvt-node" .node .node "on"))
     "schedule" .poweronCron
     "path" "/system/poweron"
-    "payload" (dict "nodes" (list .node) "vms" (list) "waitForReady" false)
+    "payload" (dict "nodes" (list .node) "vms" (list) "waitForReady" false "returnHome" $.Values.returnHome)
     "kind" "node-poweron"
     "target" .node) }}
 {{- end }}

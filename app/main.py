@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from kubernetes import client, config
 
-from app import bmc, kubectl_resolver
+from app import alerts, bmc, kubectl_resolver, rotation
 
 # Grace period in seconds for pod termination (0 = immediate)
 GRACE_PERIOD_SECONDS = int(os.getenv("GRACE_PERIOD_SECONDS", "10"))
@@ -795,8 +795,10 @@ def run_poweron_sequence(
     timeout_seconds: int = 300,
     wait_nodes: list[str] = None,
     holds_lock: bool = True,
+    return_home: dict = None,
 ):
-    """Background thread: BMC power-on (IPMI/Redfish), wait for Ready, start VMs."""
+    """Background thread: BMC power-on (IPMI/Redfish), wait for Ready, start VMs,
+    then bring back the VMs that were moved off each node (``return_home``)."""
     global _poweron_in_progress, _poweron_status
     try:
         _poweron_status = {
@@ -820,10 +822,17 @@ def run_poweron_sequence(
 
         # 2. Wait for powered-on (and explicitly awaited) nodes to become Ready
         to_wait = list(dict.fromkeys(powered_nodes + list(wait_nodes or [])))
-        if wait_for_ready and to_wait:
+        go_home = bool(return_home and return_home.get("enabled", True))
+        ready_nodes = []
+        if (wait_for_ready or go_home) and to_wait:
             _poweron_status["detail"] = f"Waiting for node(s) {to_wait} to become Ready"
             for node in to_wait:
-                _wait_for_node_ready(node, timeout_seconds=timeout_seconds)
+                if _wait_for_node_ready(node, timeout_seconds=timeout_seconds):
+                    ready_nodes.append(node)
+        if go_home:
+            for node in ready_nodes:
+                _poweron_status["detail"] = f"Returning VMs to {node}"
+                rotation.return_home(node, return_home)
 
         # 3. Start target VMs
         failed_vms = {}
@@ -943,6 +952,72 @@ async def system_info():
     }
 
 
+def _rotation_error(e: Exception):
+    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@app.post("/system/rotation/{phase}", dependencies=[Depends(verify_token)])
+async def rotation_phase(phase: str, request: Request):
+    """Node rotation, called by the rotation CronJobs and the dashboard.
+
+    drain | deadline | poweron  body: the chart's `rotation` values (+ returnHome)
+    preview                     body: same; returns the plan without side effects
+    reset                       body: {"node": name} clears a failed node
+    Failures answer 500 so the CronJob is recorded as failed.
+    """
+    body = await _json_body(request)
+    try:
+        if phase == "drain":
+            return await asyncio.to_thread(rotation.drain, body, body.get("forcedSelection"))
+        if phase == "deadline":
+            return await asyncio.to_thread(rotation.deadline, body)
+        if phase == "poweron":
+            return await asyncio.to_thread(rotation.poweron, body)
+        if phase == "preview":
+            return await asyncio.to_thread(rotation.plan, body)
+        if phase == "reset":
+            if not body.get("node"):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="node is required")
+            await asyncio.to_thread(rotation.reset, str(body["node"]))
+            return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Rotation {phase} failed: {e}")
+        _rotation_error(e)
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown rotation action")
+
+
+@app.get("/system/rotation/status", dependencies=[Depends(verify_token)])
+async def rotation_status():
+    return await asyncio.to_thread(rotation.load_state)
+
+
+@app.post("/system/return-home", dependencies=[Depends(verify_token)])
+async def return_home(request: Request):
+    """Migrate the VMs whose home is `node` back to it now."""
+    body = await _json_body(request)
+    if not body.get("node"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="node is required")
+    res = await asyncio.to_thread(rotation.return_home, str(body["node"]), body.get("returnHome"))
+    if res["failed"]:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=res)
+    return res
+
+
+@app.get("/system/alerts/status", dependencies=[Depends(verify_token)])
+async def alerts_status():
+    return {"channels": await asyncio.to_thread(alerts.channels)}
+
+
+@app.post("/system/alerts/test", dependencies=[Depends(verify_token)])
+async def alerts_test(request: Request):
+    channel = str((await _json_body(request)).get("channel") or "")
+    if channel not in ("slack", "teams", "email", "youtrack"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown channel")
+    return await asyncio.to_thread(alerts.test, channel)
+
+
 @app.get("/system/poweron/status", dependencies=[Depends(verify_token)])
 async def get_poweron_status():
     """Return the current status of power-on operations."""
@@ -1007,7 +1082,8 @@ async def execute_poweron(request: Request):
     thread = threading.Thread(
         target=run_poweron_sequence,
         args=(target_nodes, target_vms, node_overrides, default_override,
-              wait_for_ready, timeout_seconds, wait_nodes, holds_lock),
+              wait_for_ready, timeout_seconds, wait_nodes, holds_lock,
+              req_body.get("returnHome")),
         daemon=True,
         name="poweron-daemon",
     )
@@ -1368,6 +1444,12 @@ def _migrate_vms_off_node(target_vms: list[str] = None):
     for vmi in on_node:
         name = vmi["metadata"]["name"]
         ns = vmi["metadata"]["namespace"]
+        try:
+            # Remembered so the VM is migrated back when this node powers on.
+            _patch_vm(ns, name, {"metadata": {"annotations": {
+                rotation.HOME_NODE: NODE_NAME, rotation.HOME_REASON: "migrated"}}})
+        except Exception as e:
+            logger.warning(f"Could not record home node of {ns}/{name}: {e}")
         migration = {
             "apiVersion": "kubevirt.io/v1",
             "kind": "VirtualMachineInstanceMigration",
@@ -1389,6 +1471,7 @@ def _migrate_vms_off_node(target_vms: list[str] = None):
         return
     logger.warning("Some VMs did not migrate in time — stopping the remainder")
     try:
+        rotation.mark_home(NODE_NAME, target_vms, reason="stopped")
         _stop_vms_on_node()
     except Exception as e:
         logger.error(f"Fallback stop failed: {e}")
