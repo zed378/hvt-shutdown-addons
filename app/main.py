@@ -5,6 +5,7 @@ import os
 import secrets
 import signal
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -19,6 +20,10 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from kubernetes import client, config
 
 from app import alerts, bmc, kubectl_resolver, rotation
+
+# rotation.py calls back into this module; hand it this instance (which is
+# `__main__` when run as `python -m app.main`) rather than letting it import a copy.
+rotation.main_module = sys.modules[__name__]
 
 # Grace period in seconds for pod termination (0 = immediate)
 GRACE_PERIOD_SECONDS = int(os.getenv("GRACE_PERIOD_SECONDS", "10"))

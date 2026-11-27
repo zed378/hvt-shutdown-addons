@@ -50,10 +50,17 @@ class RotationError(Exception):
     """A round could not run; the message is shown to the operator."""
 
 
+# The running API module. It is set by app/main.py at import: the service runs as
+# `python -m app.main`, so that module is `__main__`, and importing `app.main`
+# here would load a second, uninitialised copy.
+main_module = None
+
+
 def _m():
-    # app.main imports this module; import it lazily to avoid the cycle.
-    from app import main
-    return main
+    if main_module is None:
+        from app import main
+        return main
+    return main_module
 
 
 def _now() -> str:
